@@ -131,6 +131,9 @@ export function handleRenderRequest(c: Ctx) {
     case 29: return; // QueryFilters — would need a reply; many callers tolerate ignored
     case 30: return; // SetPictureFilter — we always use canvas bilinear/nearest
     case 33: return onCreateSolidFill(c);
+    case 34: return onCreateLinearGradient(c);
+    case 35: return onCreateRadialGradient(c);
+    case 36: return onCreateConicalGradient(c);
     default:
       console.warn(`[RENDER] unhandled minor=${minor} len=${c.bytes.byteLength}`);
   }
@@ -618,6 +621,58 @@ function onCreateSolidFill(c: Ctx) {
   c.render.pictures.set(pid, {
     id: pid, drawable: 0, format: PICT_FORMAT_ARGB32, owner: c.clientId,
     solidFill: ((a & 0xff00) << 16) | ((r & 0xff00) << 8) | (g & 0xff00) | (b >> 8),
+  });
+}
+
+/**
+ * Gradient stubs (CreateLinearGradient/Radial/Conical). We approximate the
+ * gradient as a single solid fill using the average of the stops — fine for
+ * UI tints that just want a "this region is roughly this color" effect.
+ */
+function readGradientStops(v: DataView, le: boolean, offset: number, count: number): number {
+  if (count === 0) return 0xff000000 | 0;
+  let p = offset + 4 * count;       // skip N FIXED stop positions first
+  let tr = 0, tg = 0, tb = 0, ta = 0;
+  for (let i = 0; i < count; i++, p += 8) {
+    tr += v.getUint16(p, le) >> 8;
+    tg += v.getUint16(p + 2, le) >> 8;
+    tb += v.getUint16(p + 4, le) >> 8;
+    ta += v.getUint16(p + 6, le) >> 8;
+  }
+  const r = Math.round(tr / count) & 0xff;
+  const g = Math.round(tg / count) & 0xff;
+  const b = Math.round(tb / count) & 0xff;
+  const a = Math.round(ta / count) & 0xff;
+  return ((a << 24) | (r << 16) | (g << 8) | b) | 0;
+}
+
+function onCreateLinearGradient(c: Ctx) {
+  const v = reqView(c); const le = c.littleEndian;
+  const pid = v.getUint32(4, le);
+  const numStops = v.getUint32(24, le);
+  c.render.pictures.set(pid, {
+    id: pid, drawable: 0, format: PICT_FORMAT_ARGB32, owner: c.clientId,
+    solidFill: readGradientStops(v, le, 28, numStops),
+  });
+}
+
+function onCreateRadialGradient(c: Ctx) {
+  const v = reqView(c); const le = c.littleEndian;
+  const pid = v.getUint32(4, le);
+  const numStops = v.getUint32(32, le);
+  c.render.pictures.set(pid, {
+    id: pid, drawable: 0, format: PICT_FORMAT_ARGB32, owner: c.clientId,
+    solidFill: readGradientStops(v, le, 36, numStops),
+  });
+}
+
+function onCreateConicalGradient(c: Ctx) {
+  const v = reqView(c); const le = c.littleEndian;
+  const pid = v.getUint32(4, le);
+  const numStops = v.getUint32(20, le);
+  c.render.pictures.set(pid, {
+    id: pid, drawable: 0, format: PICT_FORMAT_ARGB32, owner: c.clientId,
+    solidFill: readGradientStops(v, le, 24, numStops),
   });
 }
 

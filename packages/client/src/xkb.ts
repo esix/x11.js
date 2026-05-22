@@ -41,6 +41,8 @@ export function handleXkbRequest(c: Ctx) {
     case 18: return; // XkbSetNames
     case 21: return onPerClientFlags(c);      // XkbPerClientFlags (has reply)
     case 23: return onGetKbdByName(c);        // XkbGetKbdByName
+    // case 24 XkbGetDeviceInfo — left unhandled; previous stub crashed Mutter
+    case 25: return; // XkbSetDeviceInfo (no reply)
     default:
       console.warn(`[XKB] unhandled minor=${minor} len=${c.bytes.byteLength}`);
   }
