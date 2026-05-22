@@ -103,8 +103,22 @@ function onGetMap(c: Ctx) {
   const present = 0x0007;
   const firstKey = 8, nKeys = 248;        // keycodes 8..255 inclusive
 
-  // KEY_TYPES section: 1 KeyType (8 bytes, no map entries since nMapEntries=0)
-  const typesBytes = 8;
+  // 4 standard XKB key types with the canonical structure libxkbcommon
+  // and libX11 both expect.
+  type KType = { mask: number; numLevels: number; entries: Array<{ mask: number; level: number }> };
+  const types: KType[] = [
+    // ONE_LEVEL: no map entries
+    { mask: 0, numLevels: 1, entries: [] },
+    // TWO_LEVEL: Shift -> level 1
+    { mask: 1, numLevels: 2, entries: [{ mask: 1, level: 1 }] },
+    // ALPHABETIC: Shift -> level 1, Lock -> level 1
+    { mask: 3, numLevels: 2, entries: [{ mask: 1, level: 1 }, { mask: 2, level: 1 }] },
+    // KEYPAD: Mod2 -> level 1, Shift+Mod2 -> level 0
+    { mask: 17, numLevels: 2, entries: [{ mask: 16, level: 1 }, { mask: 17, level: 0 }] },
+  ];
+  const nTypes = types.length;
+  let typesBytes = 0;
+  for (const t of types) typesBytes += 8 + t.entries.length * 8;
 
   // KEY_SYMS section: 248 × (8-byte header + 4-byte syms[0]) = 2976 bytes
   const symsBytes = nKeys * 12;
@@ -127,8 +141,8 @@ function onGetMap(c: Ctx) {
   w.card16(present);
   // count fields (25 bytes):
   w.card8(0);                  // firstType
-  w.card8(1);                  // nTypes
-  w.card8(1);                  // totalTypes
+  w.card8(nTypes);             // nTypes
+  w.card8(nTypes);             // totalTypes
   w.card8(firstKey);           // firstKeySym
   w.card16(nKeys, );           // totalSyms (we have 1 sym per key = nKeys total)
   w.card8(nKeys);              // nKeySyms (count of KeySymMap structs)
@@ -153,15 +167,26 @@ function onGetMap(c: Ctx) {
   w.pad(2);                    // pad2
 
   // ----- KEY_TYPES section -----
-  // One KeyType with: mask=0, realMods=0, virtualMods=0, numLevels=1,
-  //                   nMapEntries=0, hasPreserve=0, pad=0
-  w.card8(0);                  // mask
-  w.card8(0);                  // realMods
-  w.card16(0);                 // virtualMods
-  w.card8(1);                  // numLevels
-  w.card8(0);                  // nMapEntries
-  w.card8(0);                  // hasPreserve
-  w.card8(0);                  // pad
+  // 4 standard types with proper structure.
+  for (const t of types) {
+    w.card8(t.mask);                  // realMods mask covered by this type
+    w.card8(t.mask);                  // realMods
+    w.card16(0);                      // virtualMods
+    w.card8(t.numLevels);             // numLevels
+    w.card8(t.entries.length);        // nMapEntries
+    w.card8(0);                       // hasPreserve
+    w.card8(0);                       // pad
+    // KTMapEntry per entry (8 bytes): active(1) + mask(1) + level(1)
+    //   + modsMods(1) + modsVMods(CARD16) + pad(2)
+    for (const e of t.entries) {
+      w.card8(1);                     // active
+      w.card8(e.mask);                // modifier mask that triggers
+      w.card8(e.level);               // level to access
+      w.card8(e.mask);                // mods.mods (real mods)
+      w.card16(0);                    // mods.vmods
+      w.card16(0);                    // pad
+    }
+  }
 
   // ----- KEY_SYMS section -----
   // For each key: kt_index[4]=0, group_info=1, width=1, nSyms=1, syms=[0]
