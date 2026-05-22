@@ -85,36 +85,100 @@ function onGetControls(c: Ctx) {
 }
 
 function onGetMap(c: Ctx) {
-  // xkbGetMapReply layout (XKBproto.h):
-  //   bytes 0..7   reply marker (1 + 1 deviceID + 2 seq + 4 length)
-  //   bytes 8..9   pad1
-  //   bytes 10..11 present (CARD16)
-  //   bytes 12..36 25 bytes of (firstType, nTypes, totalTypes, firstKeySym,
-  //                totalSyms[CARD16], nKeySyms, firstKeyAction,
-  //                totalActions[CARD16], nKeyActions, firstKeyBehavior,
-  //                nKeyBehaviors, totalKeyBehaviors, firstKeyExplicit,
-  //                nKeyExplicit, totalKeyExplicit, firstModMapKey,
-  //                nModMapKeys, totalModMapKeys, firstVModMapKey,
-  //                nVModMapKeys, totalVModMapKeys, virtualMods[CARD16])
-  //   bytes 37     minKeyCode
-  //   bytes 38     maxKeyCode
-  //   bytes 39..40 pad2[2]   (so the fixed header is 41 bytes; X aligns
-  //                pre-body to 32 then encodes the rest in body length)
+  // Return a minimal valid keymap so libxkbcommon can build a (trivial)
+  // keymap and return a non-null xkb_state. Without this, Mutter + gnome-shell
+  // crash before they reach window-managing code.
   //
-  // Net: header 8 + 4 + 25 + 2 + 2 = 41 bytes pre-body. Round to a multiple
-  // of 4 = 44 bytes total. length = (44 - 32) / 4 = 3.
-  const w = new Writer(44, c.littleEndian);
+  // We provide three sections:
+  //   KEY_TYPES (bit 0x0001): one ONE_LEVEL type with no map entries
+  //   KEY_SYMS  (bit 0x0002): 248 keys (keycodes 8..255), each mapping to
+  //                            type 0 (the ONE_LEVEL we just defined), with
+  //                            a single keysym = NoSymbol (0). Real keyboard
+  //                            input still travels through core protocol —
+  //                            this just satisfies libxkbcommon's structure.
+  //   MODIFIER_MAP (bit 0x0004): one byte per key, all zero.
+  //
+  // Section formats per XKBproto.h are bytewise-packed; counts in the
+  // header tell the reader how big each section is.
+  const present = 0x0007;
+  const firstKey = 8, nKeys = 248;        // keycodes 8..255 inclusive
+
+  // KEY_TYPES section: 1 KeyType (8 bytes, no map entries since nMapEntries=0)
+  const typesBytes = 8;
+
+  // KEY_SYMS section: 248 × (8-byte header + 4-byte syms[0]) = 2976 bytes
+  const symsBytes = nKeys * 12;
+
+  // MODIFIER_MAP section: 248 bytes (one per key)
+  const modMapBytes = nKeys;
+
+  // Body = sections, then padded to 4
+  const bodyLen = typesBytes + symsBytes + modMapBytes;
+  const headerOverflow = 9;                        // 41-byte struct header − 32 fixed
+  const total = 32 + ((headerOverflow + bodyLen + 3) & ~3);
+  const length = (total - 32) / 4;
+
+  const w = new Writer(total, c.littleEndian);
   w.card8(1);                  // reply marker
   w.card8(1);                  // deviceID
   w.card16(c.sequence);
-  w.card32(3);                 // length
+  w.card32(length);
   w.pad(2);                    // pad1
-  w.card16(0);                 // present = 0
-  for (let i = 0; i < 25; i++) w.card8(0);
+  w.card16(present);
+  // count fields (25 bytes):
+  w.card8(0);                  // firstType
+  w.card8(1);                  // nTypes
+  w.card8(1);                  // totalTypes
+  w.card8(firstKey);           // firstKeySym
+  w.card16(nKeys, );           // totalSyms (we have 1 sym per key = nKeys total)
+  w.card8(nKeys);              // nKeySyms (count of KeySymMap structs)
+  w.card8(0);                  // firstKeyAction
+  w.card16(0);                 // totalActions
+  w.card8(0);                  // nKeyActions
+  w.card8(0);                  // firstKeyBehavior
+  w.card8(0);                  // nKeyBehaviors
+  w.card8(0);                  // totalKeyBehaviors
+  w.card8(0);                  // firstKeyExplicit
+  w.card8(0);                  // nKeyExplicit
+  w.card8(0);                  // totalKeyExplicit
+  w.card8(firstKey);           // firstModMapKey
+  w.card8(nKeys);              // nModMapKeys
+  w.card8(nKeys);              // totalModMapKeys
+  w.card8(0);                  // firstVModMapKey
+  w.card8(0);                  // nVModMapKeys
+  w.card8(0);                  // totalVModMapKeys
+  w.card16(0);                 // virtualMods
   w.card8(8);                  // minKeyCode
   w.card8(255);                // maxKeyCode
   w.pad(2);                    // pad2
-  w.pad(3);                    // trailing alignment
+
+  // ----- KEY_TYPES section -----
+  // One KeyType with: mask=0, realMods=0, virtualMods=0, numLevels=1,
+  //                   nMapEntries=0, hasPreserve=0, pad=0
+  w.card8(0);                  // mask
+  w.card8(0);                  // realMods
+  w.card16(0);                 // virtualMods
+  w.card8(1);                  // numLevels
+  w.card8(0);                  // nMapEntries
+  w.card8(0);                  // hasPreserve
+  w.card8(0);                  // pad
+
+  // ----- KEY_SYMS section -----
+  // For each key: kt_index[4]=0, group_info=1, width=1, nSyms=1, syms=[0]
+  for (let i = 0; i < nKeys; i++) {
+    w.card8(0); w.card8(0); w.card8(0); w.card8(0);    // kt_index for 4 groups
+    w.card8(1);                                        // group_info = 1 group
+    w.card8(1);                                        // width = 1 keysym per level
+    w.card16(1);                                       // nSyms
+    w.card32(0);                                       // syms[0] = NoSymbol
+  }
+
+  // ----- MODIFIER_MAP section -----
+  // One CARD8 per key, all zero (no modifiers).
+  for (let i = 0; i < nKeys; i++) w.card8(0);
+
+  // Trailing alignment to 4
+  while (w.offset < total) w.pad(1);
   c.send(w.finish());
 }
 
