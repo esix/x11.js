@@ -59,6 +59,7 @@ const OP = {
   SetFontPath: 51,
   GetFontPath: 52,
   QueryPointer: 38,
+  SetInputFocus: 42,
   GetInputFocus: 43,
   QueryKeymap: 44,
   CreatePixmap: 53,
@@ -252,6 +253,7 @@ export function handleRequest(ctx: RequestContext) {
     case OP.ListFontsWithInfo: return onListFonts(ctx); // simpler: same as ListFonts
     case OP.GetFontPath: return onGetFontPath(ctx);
     case OP.QueryPointer: return onQueryPointer(ctx);
+    case OP.SetInputFocus: return; // accept silently
     case OP.GetInputFocus: return onGetInputFocus(ctx);
     case OP.QueryKeymap: return onQueryKeymap(ctx);
     case OP.CreatePixmap: return onCreatePixmap(ctx);
