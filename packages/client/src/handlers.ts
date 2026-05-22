@@ -1899,14 +1899,6 @@ function onConfigureWindow(ctx: RequestContext) {
 }
 
 function onReparentWindow(ctx: RequestContext) {
-  // Per ICCCM 4.1.3.1, a successful XReparentWindow on a mapped client window
-  // generates this exact sequence:
-  //   1. UnmapNotify
-  //   2. ReparentNotify
-  //   3. MapNotify
-  //   4. (synthetic) ConfigureNotify with the new position in root coordinates
-  // GTK toolkits (and especially their marco/metacity-style reparent
-  // handlers) lose track of the window if any of these are missing.
   const v = reqView(ctx); const le = ctx.littleEndian;
   const wid = v.getUint32(4, le);
   const newParentId = v.getUint32(8, le);
@@ -1916,23 +1908,21 @@ function onReparentWindow(ctx: RequestContext) {
   if (!win) return;
   const wasMapped = win.mapped;
   const oldParent = ctx.windows.get(win.parent);
-  const newParent = ctx.windows.get(newParentId);
-
-  // Step 1: UnmapNotify (only if it was mapped).
-  if (wasMapped) {
-    win.mapped = false;
-    if (win.eventMask & EVENT_MASK.StructureNotify) {
-      sendUnmapNotify(ctx, win.owner, wid, wid);
-    }
-    if (oldParent?.substructureNotifyClient !== undefined) {
-      sendUnmapNotify(ctx, oldParent.substructureNotifyClient, oldParent.id, wid);
-    }
-  }
-
-  // Step 2: update parent + position, then send ReparentNotify.
+  if (wasMapped) win.mapped = false;
   win.parent = newParentId;
   win.x = newX;
   win.y = newY;
+  if (wasMapped) {
+    win.mapped = true;
+    // Re-expose so the client redraws its contents in the new frame.
+    sendExpose(ctx, win);
+  }
+  ctx.renderer.invalidate();
+  console.log(`[ReparentWindow] win=${wid} newParent=${newParentId} pos=(${newX},${newY}) wasMapped=${wasMapped}`);
+
+  // Notify both old and new parents' SubstructureNotify subscribers, plus the
+  // window itself if it selected StructureNotify.
+  const newParent = ctx.windows.get(newParentId);
   if (oldParent?.substructureNotifyClient !== undefined) {
     sendReparentNotify(ctx, oldParent.substructureNotifyClient, oldParent.id, wid, newParentId, newX, newY, win.overrideRedirect);
   }
@@ -1943,25 +1933,6 @@ function onReparentWindow(ctx: RequestContext) {
   if (win.eventMask & EVENT_MASK.StructureNotify) {
     sendReparentNotify(ctx, win.owner, wid, wid, newParentId, newX, newY, win.overrideRedirect);
   }
-
-  // Step 3: re-map and send MapNotify if it was mapped.
-  if (wasMapped) {
-    win.mapped = true;
-    if (win.eventMask & EVENT_MASK.StructureNotify) {
-      sendMapNotify(ctx, win.owner, wid, wid, win.overrideRedirect);
-    }
-    if (newParent?.substructureNotifyClient !== undefined) {
-      sendMapNotify(ctx, newParent.substructureNotifyClient, newParent.id, wid, win.overrideRedirect);
-    }
-    sendExpose(ctx, win);
-  }
-
-  // Step 4: synthetic ConfigureNotify so the client knows its absolute coords.
-  if (win.eventMask & EVENT_MASK.StructureNotify) {
-    sendConfigureNotify(ctx, win.owner, wid, win);
-  }
-
-  ctx.renderer.invalidate();
 }
 
 function onQueryTree(ctx: RequestContext) {
