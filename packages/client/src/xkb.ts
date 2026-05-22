@@ -109,8 +109,10 @@ function onGetMap(c: Ctx) {
   // KEY_SYMS section: 248 × (8-byte header + 4-byte syms[0]) = 2976 bytes
   const symsBytes = nKeys * 12;
 
-  // MODIFIER_MAP section: 248 bytes (one per key)
-  const modMapBytes = nKeys;
+  // MODIFIER_MAP section: KeyModMap entries (2 bytes each: keycode + mods).
+  // We declare zero entries — no keys are modifiers in our minimal keymap.
+  const modMapBytes = 0;
+  const nModMap = 0;
 
   // Body = sections, then padded to 4
   const bodyLen = typesBytes + symsBytes + modMapBytes;
@@ -141,9 +143,9 @@ function onGetMap(c: Ctx) {
   w.card8(0);                  // firstKeyExplicit
   w.card8(0);                  // nKeyExplicit
   w.card8(0);                  // totalKeyExplicit
-  w.card8(firstKey);           // firstModMapKey
-  w.card8(nKeys);              // nModMapKeys
-  w.card8(nKeys);              // totalModMapKeys
+  w.card8(0);                  // firstModMapKey
+  w.card8(nModMap);            // nModMapKeys
+  w.card8(nModMap);            // totalModMapKeys
   w.card8(0);                  // firstVModMapKey
   w.card8(0);                  // nVModMapKeys
   w.card8(0);                  // totalVModMapKeys
@@ -174,8 +176,7 @@ function onGetMap(c: Ctx) {
   }
 
   // ----- MODIFIER_MAP section -----
-  // One CARD8 per key, all zero (no modifiers).
-  for (let i = 0; i < nKeys; i++) w.card8(0);
+  // nModMap = 0, so this section is empty.
 
   // Trailing alignment to 4
   while (w.offset < total) w.pad(1);
