@@ -133,6 +133,35 @@ function onQueryDevice(c: Ctx) {
     dv.setUint16(6, 0, c.littleEndian);
     return buf;
   };
+  /**
+   * ValuatorClass: declares a single axis on a master pointer. GTK4 requires
+   * at least one valuator per pointer to consider XI2 functional. We expose
+   * absolute X and Y axes spanning the virtual screen.
+   *
+   * Layout (44 bytes total):
+   *   type(2)=2 + len(2)=11 + sourceid(2) + number(2) + label(4)
+   *   + min(FP3232 8) + max(FP3232 8) + value(FP3232 8) + resolution(4)
+   *   + mode(1) + pad(3)
+   */
+  const buildValuatorClass = (sourceId: number, axisNumber: number): Uint8Array => {
+    const buf = new Uint8Array(44);
+    const dv = new DataView(buf.buffer);
+    dv.setUint16(0, 2, c.littleEndian);                  // type = ValuatorClass
+    dv.setUint16(2, 11, c.littleEndian);                 // len = 11 (× 4 = 44)
+    dv.setUint16(4, sourceId, c.littleEndian);
+    dv.setUint16(6, axisNumber, c.littleEndian);
+    dv.setUint32(8, 0, c.littleEndian);                  // label atom = None
+    // min FP3232 (8 bytes: high 4 = INT32, low 4 = CARD32 frac); we use 0
+    dv.setUint32(12, 0, c.littleEndian); dv.setUint32(16, 0, c.littleEndian);
+    // max FP3232: 8192 (more than any screen)
+    dv.setInt32(20, 8192, c.littleEndian); dv.setUint32(24, 0, c.littleEndian);
+    // value FP3232: current position (we just use 0)
+    dv.setInt32(28, 0, c.littleEndian); dv.setUint32(32, 0, c.littleEndian);
+    dv.setUint32(36, 1, c.littleEndian);                 // resolution (counts/m)
+    buf[40] = 1;                                         // mode = Absolute
+    // bytes 41..43 are pad (already 0)
+    return buf;
+  };
 
   const nameFor = (id: number) =>
     id === MASTER_POINTER_ID ? 'Virtual core pointer' : 'Virtual core keyboard';
@@ -146,16 +175,29 @@ function onQueryDevice(c: Ctx) {
   for (const id of devices) {
     const name = nameFor(id);
     const namePadded = (name.length + 3) & ~3;
-    const classBytes = id === MASTER_POINTER_ID
-      ? buildButtonClass(id)
-      : buildKeyClass(id);
+    // Pointer = ButtonClass + ValuatorClass(X) + ValuatorClass(Y);
+    // Keyboard = KeyClass.
+    let classBytes: Uint8Array;
+    let numClasses = 1;
+    if (id === MASTER_POINTER_ID) {
+      const btn = buildButtonClass(id);
+      const vx = buildValuatorClass(id, 0);
+      const vy = buildValuatorClass(id, 1);
+      classBytes = new Uint8Array(btn.length + vx.length + vy.length);
+      classBytes.set(btn, 0);
+      classBytes.set(vx, btn.length);
+      classBytes.set(vy, btn.length + vx.length);
+      numClasses = 3;
+    } else {
+      classBytes = buildKeyClass(id);
+    }
     const blkLen = 12 + namePadded + classBytes.length;
     const blk = new Uint8Array(blkLen);
     const bv = new DataView(blk.buffer);
     bv.setUint16(0, id, c.littleEndian);                                  // deviceid
     bv.setUint16(2, id === MASTER_POINTER_ID ? 1 : 2, c.littleEndian);   // use
     bv.setUint16(4, id === MASTER_POINTER_ID ? MASTER_KEYBOARD_ID : MASTER_POINTER_ID, c.littleEndian);
-    bv.setUint16(6, 1, c.littleEndian);                                  // num_classes = 1
+    bv.setUint16(6, numClasses, c.littleEndian);                         // num_classes
     bv.setUint16(8, name.length, c.littleEndian);                        // name_len
     blk[10] = 1;                                                         // enabled
     blk[11] = 0;                                                         // pad
