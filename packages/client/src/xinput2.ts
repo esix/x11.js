@@ -94,7 +94,7 @@ function onQueryVersion(c: Ctx) {
   w.card8(0);
   w.card16(c.sequence);
   w.card32(0);                // length
-  w.card16(2); w.card16(3);   // major=2 minor=3
+  w.card16(2); w.card16(4);   // major=2 minor=4 (GTK4 expects ≥2.4)
   w.pad(20);
   c.send(w.finish());
 }
