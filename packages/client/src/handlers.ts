@@ -4,6 +4,7 @@ import { Window, Pixmap, pixelToCss, EVENT_MASK, type GC, type Drawable, type Po
 import { handleRenderRequest, RENDER_MAJOR_OPCODE, RENDER_FIRST_EVENT, RENDER_FIRST_ERROR, type RenderState } from './render.js';
 import { handleXInput2Request, XINPUT_MAJOR_OPCODE, XINPUT_FIRST_EVENT, XINPUT_FIRST_ERROR } from './xinput2.js';
 import { handleXkbRequest, XKB_MAJOR_OPCODE, XKB_FIRST_EVENT, XKB_FIRST_ERROR } from './xkb.js';
+import { handleRandrRequest, RANDR_MAJOR_OPCODE, RANDR_FIRST_EVENT, RANDR_FIRST_ERROR } from './randr.js';
 import { FONT, FAKE_FONT_NAMES } from './font.js';
 import {
   MIN_KEYCODE, MAX_KEYCODE, KEYSYMS_PER_KEYCODE,
@@ -314,6 +315,10 @@ export function handleRequest(ctx: RequestContext) {
       });
       if (ctx.opcode === XKB_MAJOR_OPCODE) return handleXkbRequest({
         bytes: ctx.bytes, littleEndian: ctx.littleEndian, sequence: ctx.sequence, send: ctx.send,
+      });
+      if (ctx.opcode === RANDR_MAJOR_OPCODE) return handleRandrRequest({
+        bytes: ctx.bytes, littleEndian: ctx.littleEndian, sequence: ctx.sequence, send: ctx.send,
+        rootWindowId: ctx.rootWindowId,
       });
       console.warn(`[client ${ctx.clientId}] unhandled opcode ${ctx.opcode} len=${ctx.bytes.byteLength}`);
   }
@@ -2002,6 +2007,11 @@ function onQueryExtension(ctx: RequestContext) {
     major = XKB_MAJOR_OPCODE;
     firstEvent = XKB_FIRST_EVENT;
     firstError = XKB_FIRST_ERROR;
+  } else if (name === 'RANDR') {
+    present = 1;
+    major = RANDR_MAJOR_OPCODE;
+    firstEvent = RANDR_FIRST_EVENT;
+    firstError = RANDR_FIRST_ERROR;
   }
   ctx.send(makeReply(ctx, 0, (w) => {
     w.card8(present); w.card8(major); w.card8(firstEvent); w.card8(firstError);
@@ -2010,7 +2020,7 @@ function onQueryExtension(ctx: RequestContext) {
 }
 
 function onListExtensions(ctx: RequestContext) {
-  const names = ['RENDER', 'XInputExtension', 'XKEYBOARD'];
+  const names = ['RENDER', 'XInputExtension', 'XKEYBOARD', 'RANDR'];
   // Reply: dataByte = numNames, then 24 bytes header, then length-prefixed names
   let bodyLen = 0;
   for (const n of names) bodyLen += 1 + n.length;
