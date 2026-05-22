@@ -1,0 +1,16 @@
+{
+  "name": "x11-js",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:server": "yarn workspace @x11-js/server dev",
+    "dev:client": "yarn workspace @x11-js/client dev"
+  },
+  "packageManager": "yarn@1.22.22",
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

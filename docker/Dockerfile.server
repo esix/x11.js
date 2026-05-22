@@ -1,0 +1,36 @@
+FROM node:20-bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        x11-apps \
+        x11-utils \
+        xauth \
+        xterm \
+        twm \
+        fvwm \
+    && rm -rf /var/lib/apt/lists/*
+
+# fvwm needs a config to do anything; without it it sits silently.
+RUN mkdir -p /root/.fvwm && cp /usr/share/fvwm2/default-config/config /root/.fvwm/config
+
+# X resources so toolkit apps (XEmacs, Athena, Lucid) default to a light
+# bg/dark fg instead of XEmacs's grey-on-grey-on-grey 3D shading that's
+# nearly invisible against our minimal visual.
+RUN printf '*background:       #cccccc\n*foreground:       #000000\nEmacs*background:  #f5f5f5\nEmacs*foreground:  #000000\nXTerm*background:  #ffffff\nXTerm*foreground:  #000000\n' > /root/.Xdefaults \
+    && cp /root/.Xdefaults /root/.Xresources
+
+RUN corepack enable && corepack prepare yarn@1.22.22 --activate
+
+# Skip twm's interactive "click to place" mode — new windows just appear.
+# Also: a left-click on a title bar raises the window first, *then* drag-moves
+# it. Default twm only moves on title-bar click, which surprised users coming
+# from modern WMs.
+RUN printf 'RandomPlacement\nNoTitleFocus\n\nFunction "raise-then-move" {\n  f.raise\n  f.move\n}\nButton1 = : title : f.function "raise-then-move"\nButton1 = : frame : f.raise\n' > /root/.twmrc
+
+WORKDIR /app
+
+ENV DISPLAY=:0
+ENV DISPLAY_NUM=0
+ENV WS_PORT=9090
+EXPOSE 9090
+
+CMD ["sh", "-lc", "yarn install && yarn workspace @x11-js/server dev"]

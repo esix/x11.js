@@ -1,0 +1,11 @@
+node_modules
+dist
+.vite
+*.log
+.DS_Store
+
+# debugging screenshots collected at repo root during development
+*.png
+
+# playwright-mcp scratch dir
+.playwright-mcp/
