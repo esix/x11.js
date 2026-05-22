@@ -100,56 +100,67 @@ function onQueryVersion(c: Ctx) {
 }
 
 function onQueryDevice(c: Ctx) {
-  // Request: deviceid (CARD16) + pad(2). 0 == XIAllDevices, 1 == XIAllMasterDevices,
-  // 2 == master pointer (in our scheme), 3 == master keyboard, anything else → empty.
+  // Request: deviceid (CARD16) + pad(2). 0 == XIAllDevices, 1 == XIAllMasterDevices.
   const v = reqView(c); const le = c.littleEndian;
   const requested = v.getUint16(4, le);
   const devices: number[] = [];
-  if (requested === 0) {
-    devices.push(MASTER_POINTER_ID, MASTER_KEYBOARD_ID);
-  } else if (requested === 1) {
+  if (requested === 0 || requested === 1) {
     devices.push(MASTER_POINTER_ID, MASTER_KEYBOARD_ID);
   } else if (requested === MASTER_POINTER_ID || requested === MASTER_KEYBOARD_ID) {
     devices.push(requested);
   }
 
-  // Reply layout (XInput2 spec):
-  //   header (8) + num_devices (CARD16) + pad(22) + per-device blocks
-  //
-  // Per-device block (xXIDeviceInfo, packed):
-  //   deviceid: CARD16
-  //   use:      CARD16   (1=master pointer, 2=master keyboard,
-  //                      3=slave pointer, 4=slave keyboard, 5=floating slave)
-  //   attachment: CARD16 (paired master's deviceid; for masters, the other
-  //                      master in the pair)
-  //   num_classes: CARD16  (we report 0 — no detailed classes)
-  //   name_len: CARD16
-  //   enabled:  BOOL (CARD8)
-  //   pad:      CARD8
-  //   name bytes (UTF-8), padded to 4 bytes
-  //   (no class info since num_classes=0)
+  // GTK4 considers XI2 unsupported unless each master device has at least one
+  // device class. We attach a minimal KeyClass to the master keyboard and a
+  // ButtonClass to the master pointer.
+  const buildKeyClass = (sourceId: number): Uint8Array => {
+    // type(2)=0 + len(2)=2(words=8B) + sourceid(2) + num_keys(2) = 8 bytes
+    const buf = new Uint8Array(8);
+    const dv = new DataView(buf.buffer);
+    dv.setUint16(0, 0, c.littleEndian);          // type = KeyClass
+    dv.setUint16(2, 2, c.littleEndian);          // len = 2 (×4 = 8 bytes)
+    dv.setUint16(4, sourceId, c.littleEndian);   // sourceid
+    dv.setUint16(6, 0, c.littleEndian);          // num_keys
+    return buf;
+  };
+  const buildButtonClass = (sourceId: number): Uint8Array => {
+    // type(2)=1 + len(2)=2 + sourceid(2) + num_buttons(2) = 8 bytes
+    const buf = new Uint8Array(8);
+    const dv = new DataView(buf.buffer);
+    dv.setUint16(0, 1, c.littleEndian);
+    dv.setUint16(2, 2, c.littleEndian);
+    dv.setUint16(4, sourceId, c.littleEndian);
+    dv.setUint16(6, 0, c.littleEndian);
+    return buf;
+  };
 
   const nameFor = (id: number) =>
     id === MASTER_POINTER_ID ? 'Virtual core pointer' : 'Virtual core keyboard';
 
-  // Compute total length
-  let payload = 8;            // num_devices(2) + pad(22) → 24, but only 8 here (rest fits in pad block below)
-  payload = 24;               // after counts + pad
+  // Per-device block: deviceid(2) + use(2) + attachment(2) + num_classes(2)
+  //   + name_len(2) + enabled(1) + pad(1) = 12 byte header
+  //   + name (padded to 4)
+  //   + concatenated class entries (each 8+ bytes, all 4-byte aligned)
+  let payload = 24;            // header (num_devices + 22 pad)
   const blocks: Uint8Array[] = [];
   for (const id of devices) {
     const name = nameFor(id);
     const namePadded = (name.length + 3) & ~3;
-    const blkLen = 12 + namePadded;
+    const classBytes = id === MASTER_POINTER_ID
+      ? buildButtonClass(id)
+      : buildKeyClass(id);
+    const blkLen = 12 + namePadded + classBytes.length;
     const blk = new Uint8Array(blkLen);
     const bv = new DataView(blk.buffer);
-    bv.setUint16(0, id, c.littleEndian);
+    bv.setUint16(0, id, c.littleEndian);                                  // deviceid
     bv.setUint16(2, id === MASTER_POINTER_ID ? 1 : 2, c.littleEndian);   // use
-    bv.setUint16(4, id === MASTER_POINTER_ID ? MASTER_KEYBOARD_ID : MASTER_POINTER_ID, c.littleEndian); // attachment
-    bv.setUint16(6, 0, c.littleEndian);                                  // num_classes
+    bv.setUint16(4, id === MASTER_POINTER_ID ? MASTER_KEYBOARD_ID : MASTER_POINTER_ID, c.littleEndian);
+    bv.setUint16(6, 1, c.littleEndian);                                  // num_classes = 1
     bv.setUint16(8, name.length, c.littleEndian);                        // name_len
     blk[10] = 1;                                                         // enabled
     blk[11] = 0;                                                         // pad
     for (let i = 0; i < name.length; i++) blk[12 + i] = name.charCodeAt(i);
+    blk.set(classBytes, 12 + namePadded);
     blocks.push(blk);
     payload += blkLen;
   }
