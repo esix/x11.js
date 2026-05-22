@@ -103,20 +103,14 @@ function onGetMap(c: Ctx) {
   const present = 0x0007;
   const firstKey = 8, nKeys = 248;        // keycodes 8..255 inclusive
 
-  // KEY_TYPES section: 4 KeyType structs (8 bytes each, no map entries).
-  // libX11 builds in 4 standard types (ONE_LEVEL, TWO_LEVEL, ALPHABETIC,
-  // KEYPAD); GDK's XkbGetUpdatedMap merges server data with the built-ins,
-  // and it bails if we claim fewer than 4 standard types.
-  const nTypes = 4;
-  const typesBytes = nTypes * 8;
+  // KEY_TYPES section: 1 KeyType (8 bytes, no map entries since nMapEntries=0)
+  const typesBytes = 8;
 
   // KEY_SYMS section: 248 × (8-byte header + 4-byte syms[0]) = 2976 bytes
   const symsBytes = nKeys * 12;
 
-  // MODIFIER_MAP section: KeyModMap entries (2 bytes each: keycode + mods).
-  // We declare zero entries — no keys are modifiers in our minimal keymap.
-  const modMapBytes = 0;
-  const nModMap = 0;
+  // MODIFIER_MAP section: 248 bytes (one per key)
+  const modMapBytes = nKeys;
 
   // Body = sections, then padded to 4
   const bodyLen = typesBytes + symsBytes + modMapBytes;
@@ -133,8 +127,8 @@ function onGetMap(c: Ctx) {
   w.card16(present);
   // count fields (25 bytes):
   w.card8(0);                  // firstType
-  w.card8(nTypes);             // nTypes
-  w.card8(nTypes);             // totalTypes
+  w.card8(1);                  // nTypes
+  w.card8(1);                  // totalTypes
   w.card8(firstKey);           // firstKeySym
   w.card16(nKeys, );           // totalSyms (we have 1 sym per key = nKeys total)
   w.card8(nKeys);              // nKeySyms (count of KeySymMap structs)
@@ -147,9 +141,9 @@ function onGetMap(c: Ctx) {
   w.card8(0);                  // firstKeyExplicit
   w.card8(0);                  // nKeyExplicit
   w.card8(0);                  // totalKeyExplicit
-  w.card8(0);                  // firstModMapKey
-  w.card8(nModMap);            // nModMapKeys
-  w.card8(nModMap);            // totalModMapKeys
+  w.card8(firstKey);           // firstModMapKey
+  w.card8(nKeys);              // nModMapKeys
+  w.card8(nKeys);              // totalModMapKeys
   w.card8(0);                  // firstVModMapKey
   w.card8(0);                  // nVModMapKeys
   w.card8(0);                  // totalVModMapKeys
@@ -159,19 +153,15 @@ function onGetMap(c: Ctx) {
   w.pad(2);                    // pad2
 
   // ----- KEY_TYPES section -----
-  // 4 standard XKB types: ONE_LEVEL, TWO_LEVEL, ALPHABETIC, KEYPAD.
-  // We declare each with numLevels=1 and zero map entries — they're
-  // structurally present but functionally inert. Real keyboard input still
-  // goes through the X core protocol.
-  for (let i = 0; i < nTypes; i++) {
-    w.card8(0);                // mask
-    w.card8(0);                // realMods
-    w.card16(0);               // virtualMods
-    w.card8(1);                // numLevels
-    w.card8(0);                // nMapEntries
-    w.card8(0);                // hasPreserve
-    w.card8(0);                // pad
-  }
+  // One KeyType with: mask=0, realMods=0, virtualMods=0, numLevels=1,
+  //                   nMapEntries=0, hasPreserve=0, pad=0
+  w.card8(0);                  // mask
+  w.card8(0);                  // realMods
+  w.card16(0);                 // virtualMods
+  w.card8(1);                  // numLevels
+  w.card8(0);                  // nMapEntries
+  w.card8(0);                  // hasPreserve
+  w.card8(0);                  // pad
 
   // ----- KEY_SYMS section -----
   // For each key: kt_index[4]=0, group_info=1, width=1, nSyms=1, syms=[0]
@@ -184,7 +174,8 @@ function onGetMap(c: Ctx) {
   }
 
   // ----- MODIFIER_MAP section -----
-  // nModMap = 0, so this section is empty.
+  // One CARD8 per key, all zero (no modifiers).
+  for (let i = 0; i < nKeys; i++) w.card8(0);
 
   // Trailing alignment to 4
   while (w.offset < total) w.pad(1);
