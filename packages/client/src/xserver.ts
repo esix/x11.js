@@ -214,10 +214,19 @@ export class XServer {
         else this.modifierState &= ~bit;
       }
     }
-    const hit = this.windows.get(this.windowUnderPointer);
-    if (!hit) return;
+    // Key events propagate up the window tree: if the leaf doesn't have
+    // KeyPress/Release selected, the parent gets it, and so on. Emacs only
+    // selects key events on its top-level frame, not the inner buffer window.
     const mask = pressed ? EVENT_MASK.KeyPress : EVENT_MASK.KeyRelease;
-    if (hit.eventMask & mask) this.emit(hit, pressed ? 2 : 3, keycode & 0xff);
+    let cur: Window | undefined = this.windows.get(this.windowUnderPointer);
+    while (cur) {
+      if (cur.eventMask & mask) {
+        this.emit(cur, pressed ? 2 : 3, keycode & 0xff);
+        return;
+      }
+      if (cur.id === ROOT_WINDOW_ID) break;
+      cur = this.windows.get(cur.parent);
+    }
   }
 
   private maybeCrossing(now: Window | undefined) {
