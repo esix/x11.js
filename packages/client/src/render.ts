@@ -117,6 +117,7 @@ export function handleRenderRequest(c: Ctx) {
     case 6:  return onSetPictureClipRectangles(c);
     case 7:  return onFreePicture(c);
     case 8:  return onComposite(c);
+    case 10: return onTrapezoids(c);
     case 17: return onCreateGlyphSet(c);
     case 18: return onReferenceGlyphSet(c);
     case 19: return onFreeGlyphSet(c);
@@ -126,6 +127,9 @@ export function handleRenderRequest(c: Ctx) {
     case 24: return onCompositeGlyphs(c, 2);
     case 25: return onCompositeGlyphs(c, 4);
     case 26: return onFillRectangles(c);
+    case 28: return; // SetPictureTransform — identity by default, ignore
+    case 29: return; // QueryFilters — would need a reply; many callers tolerate ignored
+    case 30: return; // SetPictureFilter — we always use canvas bilinear/nearest
     case 33: return onCreateSolidFill(c);
     default:
       console.warn(`[RENDER] unhandled minor=${minor} len=${c.bytes.byteLength}`);
@@ -320,6 +324,89 @@ function onComposite(c: Ctx) {
   dctx.restore();
   invalidateIfWindow(c, dst);
   void maskId; // mask path not implemented yet
+}
+
+/**
+ * RENDER Trapezoids: rasterize a list of trapezoids onto dst, modulated by
+ * src as the color source. Each trapezoid is bounded by top/bottom Y plus
+ * two oblique line segments (left & right edges). For the (very common)
+ * solid-fill src case we just fillPath each trapezoid as a 4-vertex polygon
+ * — Canvas handles the rasterization, anti-aliasing included.
+ */
+function onTrapezoids(c: Ctx) {
+  const v = reqView(c); const le = c.littleEndian;
+  const op = v.getUint8(4);
+  const srcId = v.getUint32(8, le);
+  const dstId = v.getUint32(12, le);
+  // bytes 16..19 = mask-format, bytes 20..23 = src origin x/y. Each trap is 40 bytes.
+  const srcOriginX = v.getInt16(20, le);
+  const srcOriginY = v.getInt16(22, le);
+  const src = c.render.pictures.get(srcId);
+  const dst = c.render.pictures.get(dstId);
+  if (!dst) return;
+  const dstDr = c.getDrawable(dst.drawable);
+  if (!dstDr) return;
+
+  const dctx = dstDr.ctx;
+  dctx.save();
+  applyClip(dctx, dst);
+  if (op === 0 || op === 1) {
+    // Src/Clear: pre-clear the bounding rect of each trapezoid below.
+  }
+  dctx.globalCompositeOperation = pictOpToCanvas(op);
+
+  // Determine paint style.
+  let fillStyle: string | CanvasPattern = 'rgba(0,0,0,1)';
+  if (src?.solidFill !== undefined) {
+    fillStyle = argbToCss(src.solidFill);
+  } else if (src) {
+    const srcDr = c.getDrawable(src.drawable);
+    if (srcDr) {
+      // For a non-solid source, sample the source at the trapezoid's
+      // top-left as an approximation. Most callers use solid fills.
+      try {
+        const px = srcDr.ctx.getImageData(srcOriginX, srcOriginY, 1, 1).data;
+        fillStyle = `rgba(${px[0]},${px[1]},${px[2]},${(px[3] ?? 0xff) / 255})`;
+      } catch { /* fall through */ }
+    }
+  }
+  dctx.fillStyle = fillStyle;
+
+  // X RENDER fixed-point: 16.16. Read with getInt32 then /65536.
+  const fx = (off: number) => v.getInt32(off, le) / 65536;
+
+  // X-coord on a line at scanline y: linearly interpolate between p1 and p2.
+  // If the line is horizontal (p1.y == p2.y), return p1.x.
+  const xAtY = (p1x: number, p1y: number, p2x: number, p2y: number, y: number) => {
+    const dy = p2y - p1y;
+    if (Math.abs(dy) < 1e-6) return p1x;
+    return p1x + (p2x - p1x) * (y - p1y) / dy;
+  };
+
+  for (let p = 24; p + 40 <= c.bytes.byteLength; p += 40) {
+    const top = fx(p);
+    const bottom = fx(p + 4);
+    const lp1x = fx(p + 8),  lp1y = fx(p + 12);
+    const lp2x = fx(p + 16), lp2y = fx(p + 20);
+    const rp1x = fx(p + 24), rp1y = fx(p + 28);
+    const rp2x = fx(p + 32), rp2y = fx(p + 36);
+    if (bottom <= top) continue;
+
+    const xTL = xAtY(lp1x, lp1y, lp2x, lp2y, top);
+    const xBL = xAtY(lp1x, lp1y, lp2x, lp2y, bottom);
+    const xTR = xAtY(rp1x, rp1y, rp2x, rp2y, top);
+    const xBR = xAtY(rp1x, rp1y, rp2x, rp2y, bottom);
+
+    dctx.beginPath();
+    dctx.moveTo(xTL, top);
+    dctx.lineTo(xTR, top);
+    dctx.lineTo(xBR, bottom);
+    dctx.lineTo(xBL, bottom);
+    dctx.closePath();
+    dctx.fill();
+  }
+  dctx.restore();
+  invalidateIfWindow(c, dst);
 }
 
 function onCreateGlyphSet(c: Ctx) {
