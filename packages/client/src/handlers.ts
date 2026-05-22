@@ -3,6 +3,7 @@ import type { Renderer } from './renderer.js';
 import { Window, Pixmap, pixelToCss, EVENT_MASK, type GC, type Drawable, type PointerGrab, type Cursor } from './types.js';
 import { handleRenderRequest, RENDER_MAJOR_OPCODE, RENDER_FIRST_EVENT, RENDER_FIRST_ERROR, type RenderState } from './render.js';
 import { handleXInput2Request, XINPUT_MAJOR_OPCODE, XINPUT_FIRST_EVENT, XINPUT_FIRST_ERROR } from './xinput2.js';
+import { handleXkbRequest, XKB_MAJOR_OPCODE, XKB_FIRST_EVENT, XKB_FIRST_ERROR } from './xkb.js';
 import { FONT, FAKE_FONT_NAMES } from './font.js';
 import {
   MIN_KEYCODE, MAX_KEYCODE, KEYSYMS_PER_KEYCODE,
@@ -310,6 +311,9 @@ export function handleRequest(ctx: RequestContext) {
         bytes: ctx.bytes, littleEndian: ctx.littleEndian, sequence: ctx.sequence, send: ctx.send,
         rootWindowId: ctx.rootWindowId, pointerX: ctx.pointerX, pointerY: ctx.pointerY,
         buttonState: ctx.buttonState,
+      });
+      if (ctx.opcode === XKB_MAJOR_OPCODE) return handleXkbRequest({
+        bytes: ctx.bytes, littleEndian: ctx.littleEndian, sequence: ctx.sequence, send: ctx.send,
       });
       console.warn(`[client ${ctx.clientId}] unhandled opcode ${ctx.opcode} len=${ctx.bytes.byteLength}`);
   }
@@ -1993,6 +1997,11 @@ function onQueryExtension(ctx: RequestContext) {
     major = XINPUT_MAJOR_OPCODE;
     firstEvent = XINPUT_FIRST_EVENT;
     firstError = XINPUT_FIRST_ERROR;
+  } else if (name === 'XKEYBOARD') {
+    present = 1;
+    major = XKB_MAJOR_OPCODE;
+    firstEvent = XKB_FIRST_EVENT;
+    firstError = XKB_FIRST_ERROR;
   }
   ctx.send(makeReply(ctx, 0, (w) => {
     w.card8(present); w.card8(major); w.card8(firstEvent); w.card8(firstError);
@@ -2001,7 +2010,7 @@ function onQueryExtension(ctx: RequestContext) {
 }
 
 function onListExtensions(ctx: RequestContext) {
-  const names = ['RENDER', 'XInputExtension'];
+  const names = ['RENDER', 'XInputExtension', 'XKEYBOARD'];
   // Reply: dataByte = numNames, then 24 bytes header, then length-prefixed names
   let bodyLen = 0;
   for (const n of names) bodyLen += 1 + n.length;
