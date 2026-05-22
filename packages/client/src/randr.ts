@@ -25,36 +25,56 @@ const MODE_ID = 300;
 
 export function handleRandrRequest(c: Ctx) {
   const minor = new DataView(c.bytes.buffer, c.bytes.byteOffset, c.bytes.byteLength).getUint8(1);
+  // Opcodes per xcb-proto randr.xml (RANDR 1.5):
+  //   0  QueryVersion              1  Old GetScreenInfo
+  //   2  SetScreenConfig           3  Old SelectInput / etc.
+  //   4  SelectInput               5  GetScreenInfo (old)
+  //   6  GetScreenSizeRange        7  SetScreenSize
+  //   8  GetScreenResources        9  GetOutputInfo
+  //  10  ListOutputProperties     11  QueryOutputProperty
+  //  12  ConfigureOutputProperty  13  ChangeOutputProperty
+  //  14  DeleteOutputProperty     15  GetOutputProperty
+  //  16  CreateMode               17  DestroyMode
+  //  18  AddOutputMode            19  DeleteOutputMode
+  //  20  GetCrtcInfo              21  SetCrtcConfig
+  //  22  GetCrtcGammaSize         23  GetCrtcGamma
+  //  24  SetCrtcGamma             25  GetScreenResourcesCurrent
+  //  26  SetCrtcTransform         27  GetCrtcTransform
+  //  28  GetPanning               29  SetPanning
+  //  30  SetOutputPrimary         31  GetOutputPrimary
+  //  32  GetProviders             33  GetProviderInfo
+  //  34  SetProviderOffloadSink   35  SetProviderOutputSource
+  //  36  ListProviderProperties   37  QueryProviderProperty
+  //  38  ConfigureProviderProperty 39 ChangeProviderProperty
+  //  40  DeleteProviderProperty   41  GetProviderProperty
+  //  42  GetMonitors              43  SetMonitor              44 DeleteMonitor
   switch (minor) {
     case 0:  return onQueryVersion(c);
-    case 2:  return; // SetScreenConfig (accept)
-    case 4:  return; // SelectInput (no reply)
+    case 2:  return; // SetScreenConfig
+    case 4:  return; // SelectInput
     case 5:  return onGetScreenInfo(c);
     case 6:  return onGetScreenSizeRange(c);
     case 7:  return; // SetScreenSize
     case 8:  return onGetScreenResources(c);
     case 9:  return onGetOutputInfo(c);
     case 10: return onListOutputProperties(c);
-    case 13: return onGetOutputProperty(c);
-    case 15: return onGetCrtcInfo(c);
-    case 25: return onGetScreenResources(c);    // Current variant
-    case 21: return onGetCrtcGamma(c);
-    case 23: return onGetCrtcGammaSize(c);
-    case 16: return; // SetCrtcConfig (accept)
-    case 17: return onGetCrtcTransform(c);
+    case 15: return onGetOutputProperty(c);
     case 20: return onGetCrtcInfo(c);
-    case 26: return onGetOutputPrimary(c);
-    case 27: return; // SetOutputPrimary
-    case 28: return onGetProviders(c);
+    case 21: return; // SetCrtcConfig
+    case 22: return onGetCrtcGammaSize(c);
+    case 23: return onGetCrtcGamma(c);
+    case 25: return onGetScreenResources(c);    // Current variant
+    case 27: return onGetCrtcTransform(c);
+    case 31: return onGetOutputPrimary(c);
+    case 30: return; // SetOutputPrimary
+    case 32: return onGetProviders(c);
+    case 33: return onGetProviderInfo(c);
+    case 36: return onListProviderProperties(c);
+    case 37: return onQueryProviderProperty(c);
+    case 41: return onGetProviderProperty(c);
     case 42: return onGetMonitors(c);
-    case 43: return; // SetMonitor (accept)
-    case 44: return; // DeleteMonitor (accept)
-    case 32: return onGetProviderInfo(c);
-    case 33: return; // SetProviderOffloadSink
-    case 34: return; // SetProviderOutputSource
-    case 35: return onListProviderProperties(c);
-    case 36: return onQueryProviderProperty(c);
-    case 38: return onGetProviderProperty(c);
+    case 43: return; // SetMonitor
+    case 44: return; // DeleteMonitor
     default:
       console.warn(`[RANDR] unhandled minor=${minor} len=${c.bytes.byteLength}`);
   }
@@ -130,28 +150,33 @@ function onGetScreenResources(c: Ctx) {
 }
 
 function onGetOutputInfo(c: Ctx) {
-  // Reply: status, crtc, mm_w, mm_h, connection, subpixel,
-  //   num_crtcs, num_modes, num_preferred, num_clones, name_len,
-  //   then arrays.
+  // GetOutputInfo reply layout (X RANDR spec, in wire order after 8-byte
+  // reply marker):
+  //   bytes 8..23  timestamp(4) + crtc(4) + mm_w(4) + mm_h(4)        [16 bytes]
+  //   bytes 24..31 connection(1) + subpixel(1) + num_crtcs(2) +
+  //                num_modes(2) + num_preferred(2)                   [8 bytes]
+  //   bytes 32..35 num_clones(2) + name_len(2)        ← spills into "body"
+  //   bytes 36..   crtcs[] + modes[] + clones[] + name (padded to 4)
   const name = 'X11JS-1';
   const padded = (name.length + 3) & ~3;
-  const extra = 4 /* 1 crtc */ + 4 /* 1 mode */ + 4 /* 0 clones, none */ + padded;
+  const numCrtcs = 1, numModes = 1, numClones = 0;
+  const extra = 4 /* num_clones + name_len overflow into body */
+              + 4 * numCrtcs + 4 * numModes + 4 * numClones + padded;
   reply(c, 0, extra, (w) => {
     w.card32(0);                       // timestamp
     w.card32(CRTC_ID);                 // crtc
-    w.card32(270);                     // mm_w (~10 inch)
+    w.card32(270);                     // mm_w
     w.card32(203);                     // mm_h
     w.card8(0);                        // connection = Connected
     w.card8(0);                        // subpixel order = unknown
-    w.card16(1);                       // num_crtcs
-    w.card16(1);                       // num_modes
+    w.card16(numCrtcs);
+    w.card16(numModes);
     w.card16(1);                       // num_preferred
-    w.card16(0);                       // num_clones
+    // overflow into body:
+    w.card16(numClones);
     w.card16(name.length);             // name_len
     w.card32(CRTC_ID);                 // crtcs[0]
     w.card32(MODE_ID);                 // modes[0]
-    // (no clones since num_clones=0; we still wrote 4 extra bytes — adjust below)
-    w.pad(4);
     for (let i = 0; i < name.length; i++) w.card8(name.charCodeAt(i));
     while (w.offset % 4) w.pad(1);
   });

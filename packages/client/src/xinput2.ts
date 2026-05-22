@@ -55,18 +55,20 @@ export function handleXInput2Request(c: Ctx) {
 }
 
 function onQueryPointer(c: Ctx) {
-  // Reply layout (FP1616 = INT32 fixed 16.16):
-  //   root: WINDOW (4) | child: WINDOW (4)
-  //   root_x: FP1616 (4) | root_y: FP1616 (4)
-  //   win_x: FP1616 (4)  | win_y: FP1616 (4)
-  //   same_screen: BOOL (1) | pad (1) | buttons_len (2)  -> num CARD32 mask
-  //   mods (4xCARD32) | group (4) | buttons (CARD32 * buttons_len)
-  // We use 0 modifiers / 0 buttons array for simplicity, plus same_screen=1.
-  const w = new Writer(60, c.littleEndian);
+  // XIQueryPointer reply layout (per xcb-proto xinput.xml):
+  //   bytes 0..7   reply marker (1 + 1 pad + 2 seq + 4 length)
+  //   bytes 8..15  root, child (4 each)
+  //   bytes 16..31 4 × FP1616 (root_x/y, win_x/y)
+  //   bytes 32..35 same_screen(1) + pad(1) + buttons_len(2)
+  //   bytes 36..51 ModifierInfo: base, latched, locked, effective (CARD32×4)
+  //   bytes 52..55 GroupInfo: base, latched, locked, effective (CARD8×4)
+  //   bytes 56..   buttons[buttons_len] (CARD32 each)
+  // No buttons → total 56 bytes → extra = 24 (length = 6).
+  const w = new Writer(56, c.littleEndian);
   w.card8(1);
-  w.card8(0);  // pad
+  w.card8(0);
   w.card16(c.sequence);
-  w.card32(7);                       // reply length in 4-byte units past 32 (28 extra bytes)
+  w.card32(6);                       // length = (56 - 32) / 4
   w.card32(c.rootWindowId);
   w.card32(0);                       // child
   w.card32(c.pointerX * 65536);
@@ -75,11 +77,11 @@ function onQueryPointer(c: Ctx) {
   w.card32(c.pointerY * 65536);
   w.card8(1);                        // same_screen
   w.card8(0);
-  w.card16(0);                       // buttons_len in CARD32 units
-  // 4 mod fields (effective, latched, locked, group_effective)
-  w.card32(c.buttonState & 0xffff);  // effective mods (incl. button bits 0x100..0x1f00)
+  w.card16(0);                       // buttons_len
+  // ModifierInfo: 4 × CARD32
+  w.card32(c.buttonState & 0xffff);
   w.card32(0); w.card32(0); w.card32(0);
-  // group_effective + latched + locked + locked? — 4 bytes
+  // GroupInfo: 4 × CARD8 packed into one CARD32
   w.card32(0);
   c.send(w.finish());
 }

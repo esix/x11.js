@@ -2006,17 +2006,17 @@ function onQueryExtension(ctx: RequestContext) {
     major = XINPUT_MAJOR_OPCODE;
     firstEvent = XINPUT_FIRST_EVENT;
     firstError = XINPUT_FIRST_ERROR;
-  } else if (name === 'XKEYBOARD') {
+  } else if (name === 'XKEYBOARD' && (globalThis as any).__enable_xkb !== false) {
     present = 1;
     major = XKB_MAJOR_OPCODE;
     firstEvent = XKB_FIRST_EVENT;
     firstError = XKB_FIRST_ERROR;
-  } else if (name === 'RANDR') {
+  } else if (name === 'RANDR' && (globalThis as any).__enable_randr !== false) {
     present = 1;
     major = RANDR_MAJOR_OPCODE;
     firstEvent = RANDR_FIRST_EVENT;
     firstError = RANDR_FIRST_ERROR;
-  } else if (name === 'MIT-SHM') {
+  } else if (name === 'MIT-SHM' && (globalThis as any).__enable_shm !== false) {
     present = 1;
     major = MITSHM_MAJOR_OPCODE;
     firstEvent = MITSHM_FIRST_EVENT;
