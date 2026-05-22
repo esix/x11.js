@@ -1265,6 +1265,26 @@ function onPutImage(ctx: RequestContext) {
     return;
   }
 
+  // Depth-8 ZPixmap: alpha/grayscale data (1 byte per pixel). Many GTK icon
+  // paths upload depth-8 masks. Render as a luminance image (grayscale opaque).
+  if (depth === 8 && format === 2) {
+    const stride = (width + 3) & ~3;
+    const src = ctx.bytes.subarray(24, 24 + stride * height);
+    if (src.byteLength < stride * height) return;
+    const img = new ImageData(width, height);
+    const out = img.data;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const px = src[y * stride + x] ?? 0;
+        const o = (y * width + x) * 4;
+        out[o] = px; out[o + 1] = px; out[o + 2] = px; out[o + 3] = 0xff;
+      }
+    }
+    drawable.ctx.putImageData(img, dstX, dstY);
+    invalidateIfWindow(ctx, drawable);
+    return;
+  }
+
   if (format !== 2 || (depth !== 24 && depth !== 32)) {
     console.warn(`[PutImage] unsupported format=${format} depth=${depth}`);
     return;
