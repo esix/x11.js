@@ -6,6 +6,7 @@ import { handleXInput2Request, XINPUT_MAJOR_OPCODE, XINPUT_FIRST_EVENT, XINPUT_F
 import { handleXkbRequest, XKB_MAJOR_OPCODE, XKB_FIRST_EVENT, XKB_FIRST_ERROR } from './xkb.js';
 import { handleRandrRequest, RANDR_MAJOR_OPCODE, RANDR_FIRST_EVENT, RANDR_FIRST_ERROR } from './randr.js';
 import { handleMitShmRequest, MITSHM_MAJOR_OPCODE, MITSHM_FIRST_EVENT, MITSHM_FIRST_ERROR } from './mitshm.js';
+import { handleShapeRequest, SHAPE_MAJOR_OPCODE, SHAPE_FIRST_EVENT, SHAPE_FIRST_ERROR } from './shape.js';
 import { FONT, FAKE_FONT_NAMES } from './font.js';
 import {
   MIN_KEYCODE, MAX_KEYCODE, KEYSYMS_PER_KEYCODE,
@@ -322,6 +323,9 @@ export function handleRequest(ctx: RequestContext) {
         rootWindowId: ctx.rootWindowId,
       });
       if (ctx.opcode === MITSHM_MAJOR_OPCODE) return handleMitShmRequest({
+        bytes: ctx.bytes, littleEndian: ctx.littleEndian, sequence: ctx.sequence, send: ctx.send,
+      });
+      if (ctx.opcode === SHAPE_MAJOR_OPCODE) return handleShapeRequest({
         bytes: ctx.bytes, littleEndian: ctx.littleEndian, sequence: ctx.sequence, send: ctx.send,
       });
       console.warn(`[client ${ctx.clientId}] unhandled opcode ${ctx.opcode} len=${ctx.bytes.byteLength}`);
@@ -2021,6 +2025,11 @@ function onQueryExtension(ctx: RequestContext) {
     major = MITSHM_MAJOR_OPCODE;
     firstEvent = MITSHM_FIRST_EVENT;
     firstError = MITSHM_FIRST_ERROR;
+  } else if (name === 'SHAPE') {
+    present = 1;
+    major = SHAPE_MAJOR_OPCODE;
+    firstEvent = SHAPE_FIRST_EVENT;
+    firstError = SHAPE_FIRST_ERROR;
   }
   ctx.send(makeReply(ctx, 0, (w) => {
     w.card8(present); w.card8(major); w.card8(firstEvent); w.card8(firstError);
@@ -2029,7 +2038,7 @@ function onQueryExtension(ctx: RequestContext) {
 }
 
 function onListExtensions(ctx: RequestContext) {
-  const names = ['RENDER', 'XInputExtension'];
+  const names = ['RENDER', 'XInputExtension', 'SHAPE'];
   if ((globalThis as any).__enable_xkb === true) names.push('XKEYBOARD');
   if ((globalThis as any).__enable_randr === true) names.push('RANDR');
   if ((globalThis as any).__enable_shm === true) names.push('MIT-SHM');
