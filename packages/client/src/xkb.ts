@@ -83,18 +83,48 @@ function onGetControls(c: Ctx) {
 }
 
 function onGetMap(c: Ctx) {
-  // Reply: an empty XKB map. Most callers just need a non-erroring reply.
-  // We claim minKeyCode=8, maxKeyCode=255 (typical) so libxkbcommon doesn't reject.
-  const extra = 8;
-  const w = new Writer(32 + extra, c.littleEndian);
-  w.card8(1);
+  // xkbGetMapReply (per XKBproto.h):
+  //   bytes 0..7   reply marker
+  //   bytes 8..9   pad1[2]
+  //   bytes 10..11 present (CARD16)
+  //   bytes 12     firstType
+  //   bytes 13     nTypes
+  //   bytes 14     totalTypes
+  //   bytes 15     firstKeySym
+  //   bytes 16..17 totalSyms
+  //   bytes 18     nKeySyms
+  //   bytes 19     firstKeyAction
+  //   bytes 20..21 totalActions
+  //   bytes 22     nKeyActions
+  //   bytes 23     firstKeyBehavior
+  //   bytes 24     nKeyBehaviors
+  //   bytes 25     totalKeyBehaviors
+  //   bytes 26     firstKeyExplicit
+  //   bytes 27     nKeyExplicit
+  //   bytes 28     totalKeyExplicit
+  //   bytes 29     firstModMapKey
+  //   bytes 30     nModMapKeys
+  //   bytes 31     totalModMapKeys
+  //   bytes 32     firstVModMapKey
+  //   bytes 33     nVModMapKeys
+  //   bytes 34     totalVModMapKeys
+  //   bytes 35..36 virtualMods (CARD16)   ← actually 2 bytes
+  //   wait that puts 35..36 = 2 bytes ending at 37
+  //   bytes 37     minKeyCode
+  //   bytes 38     maxKeyCode
+  //   bytes 39..40 pad2[2]
+  // total = 40 bytes when no data. We pad up to 40.
+  const w = new Writer(40, c.littleEndian);
+  w.card8(1);                  // reply marker
   w.card8(1);                  // deviceID
   w.card16(c.sequence);
-  w.card32(extra / 4);
-  w.card16(0);                 // present
-  w.card8(8); w.card8(255);    // min/max key
-  w.pad(2);                    // present flags
-  for (let i = 0; i < 16 + extra; i++) w.card8(0);
+  w.card32(2);                 // length = 8 extra bytes / 4
+  w.pad(2);                    // pad1
+  w.card16(0);                 // present = 0 (no fields included)
+  for (let i = 0; i < 23; i++) w.card8(0);  // 23 zero bytes for the count fields
+  w.card8(8);                  // minKeyCode
+  w.card8(255);                // maxKeyCode
+  w.pad(2);                    // pad2
   c.send(w.finish());
 }
 

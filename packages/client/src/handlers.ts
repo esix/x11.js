@@ -2006,17 +2006,17 @@ function onQueryExtension(ctx: RequestContext) {
     major = XINPUT_MAJOR_OPCODE;
     firstEvent = XINPUT_FIRST_EVENT;
     firstError = XINPUT_FIRST_ERROR;
-  } else if (name === 'XKEYBOARD' && (globalThis as any).__enable_xkb !== false) {
+  } else if (name === 'XKEYBOARD' && (globalThis as any).__enable_xkb === true) {
     present = 1;
     major = XKB_MAJOR_OPCODE;
     firstEvent = XKB_FIRST_EVENT;
     firstError = XKB_FIRST_ERROR;
-  } else if (name === 'RANDR' && (globalThis as any).__enable_randr !== false) {
+  } else if (name === 'RANDR' && (globalThis as any).__enable_randr === true) {
     present = 1;
     major = RANDR_MAJOR_OPCODE;
     firstEvent = RANDR_FIRST_EVENT;
     firstError = RANDR_FIRST_ERROR;
-  } else if (name === 'MIT-SHM' && (globalThis as any).__enable_shm !== false) {
+  } else if (name === 'MIT-SHM' && (globalThis as any).__enable_shm === true) {
     present = 1;
     major = MITSHM_MAJOR_OPCODE;
     firstEvent = MITSHM_FIRST_EVENT;
@@ -2029,7 +2029,10 @@ function onQueryExtension(ctx: RequestContext) {
 }
 
 function onListExtensions(ctx: RequestContext) {
-  const names = ['RENDER', 'XInputExtension', 'XKEYBOARD', 'RANDR', 'MIT-SHM'];
+  const names = ['RENDER', 'XInputExtension'];
+  if ((globalThis as any).__enable_xkb === true) names.push('XKEYBOARD');
+  if ((globalThis as any).__enable_randr === true) names.push('RANDR');
+  if ((globalThis as any).__enable_shm === true) names.push('MIT-SHM');
   // Reply: dataByte = numNames, then 24 bytes header, then length-prefixed names
   let bodyLen = 0;
   for (const n of names) bodyLen += 1 + n.length;
