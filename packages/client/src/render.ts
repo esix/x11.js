@@ -127,8 +127,9 @@ export function handleRenderRequest(c: Ctx) {
     case 24: return onCompositeGlyphs(c, 2);
     case 25: return onCompositeGlyphs(c, 4);
     case 26: return onFillRectangles(c);
-    case 27: return; // CreateCursor — RENDER-based color cursor; we don't show custom cursors so accept silently
+    case 27: return; // CreateCursor — RENDER-based color cursor; accept silently
     case 28: return; // SetPictureTransform — identity by default, ignore
+    case 31: return; // CreateAnimCursor — accept silently
     case 29: return; // QueryFilters — would need a reply; many callers tolerate ignored
     case 30: return; // SetPictureFilter — we always use canvas bilinear/nearest
     case 33: return onCreateSolidFill(c);
