@@ -103,8 +103,12 @@ function onGetMap(c: Ctx) {
   const present = 0x0007;
   const firstKey = 8, nKeys = 248;        // keycodes 8..255 inclusive
 
-  // KEY_TYPES section: 1 KeyType (8 bytes, no map entries since nMapEntries=0)
-  const typesBytes = 8;
+  // KEY_TYPES section: 4 KeyType structs (8 bytes each, no map entries).
+  // libX11 builds in 4 standard types (ONE_LEVEL, TWO_LEVEL, ALPHABETIC,
+  // KEYPAD); GDK's XkbGetUpdatedMap merges server data with the built-ins,
+  // and it bails if we claim fewer than 4 standard types.
+  const nTypes = 4;
+  const typesBytes = nTypes * 8;
 
   // KEY_SYMS section: 248 × (8-byte header + 4-byte syms[0]) = 2976 bytes
   const symsBytes = nKeys * 12;
@@ -129,8 +133,8 @@ function onGetMap(c: Ctx) {
   w.card16(present);
   // count fields (25 bytes):
   w.card8(0);                  // firstType
-  w.card8(1);                  // nTypes
-  w.card8(1);                  // totalTypes
+  w.card8(nTypes);             // nTypes
+  w.card8(nTypes);             // totalTypes
   w.card8(firstKey);           // firstKeySym
   w.card16(nKeys, );           // totalSyms (we have 1 sym per key = nKeys total)
   w.card8(nKeys);              // nKeySyms (count of KeySymMap structs)
@@ -155,15 +159,19 @@ function onGetMap(c: Ctx) {
   w.pad(2);                    // pad2
 
   // ----- KEY_TYPES section -----
-  // One KeyType with: mask=0, realMods=0, virtualMods=0, numLevels=1,
-  //                   nMapEntries=0, hasPreserve=0, pad=0
-  w.card8(0);                  // mask
-  w.card8(0);                  // realMods
-  w.card16(0);                 // virtualMods
-  w.card8(1);                  // numLevels
-  w.card8(0);                  // nMapEntries
-  w.card8(0);                  // hasPreserve
-  w.card8(0);                  // pad
+  // 4 standard XKB types: ONE_LEVEL, TWO_LEVEL, ALPHABETIC, KEYPAD.
+  // We declare each with numLevels=1 and zero map entries — they're
+  // structurally present but functionally inert. Real keyboard input still
+  // goes through the X core protocol.
+  for (let i = 0; i < nTypes; i++) {
+    w.card8(0);                // mask
+    w.card8(0);                // realMods
+    w.card16(0);               // virtualMods
+    w.card8(1);                // numLevels
+    w.card8(0);                // nMapEntries
+    w.card8(0);                // hasPreserve
+    w.card8(0);                // pad
+  }
 
   // ----- KEY_SYMS section -----
   // For each key: kt_index[4]=0, group_info=1, width=1, nSyms=1, syms=[0]
