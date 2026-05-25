@@ -50,11 +50,11 @@ export class Window {
   readonly ctx: OffscreenCanvasRenderingContext2D;
   readonly properties = new Map<number, PropertyValue>();
   mapped = false;
-  // Union of every client's selected event mask. We OR new selections in
-  // rather than overwriting, so that one client (e.g. marco) selecting
-  // SubstructureNotify on the panel doesn't wipe out the panel-owner's
-  // ButtonPress selection. A real X server tracks per-client masks; we
-  // settle for the union plus per-event routing to the window owner.
+  /** Aggregate event mask — what any client has selected on this window.
+   *  X11 actually tracks per-(window, client) masks, but we store the
+   *  union and preserve input-event bits across cross-client overwrites
+   *  in `applyWindowValueMask` so the WM can't accidentally clear the
+   *  window owner's ButtonPress selection. */
   eventMask = 0;
   owner = 0;
   overrideRedirect = false;
