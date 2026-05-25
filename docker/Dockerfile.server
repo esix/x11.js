@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         twm \
         fvwm \
         marco \
+        metacity \
         dbus dbus-x11 \
         gnome-panel gnome-menus \
         gnome-mahjongg gnome-mines gnome-tetravex \

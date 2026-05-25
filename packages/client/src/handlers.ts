@@ -150,6 +150,9 @@ export interface RequestContext {
   clientInfo: (clientId: number) => { sequence: number; littleEndian: boolean } | undefined;
   setActiveGrab: (grab: PointerGrab | undefined) => void;
   getActiveGrab: () => PointerGrab | undefined;
+  addPassiveButtonGrab: (window: number, button: number, modifiers: number,
+                         eventMask: number, ownerEvents: boolean, client: number) => void;
+  removePassiveButtonGrab: (window: number, button: number, modifiers: number) => void;
   pointerX: number;
   pointerY: number;
   buttonState: number;
@@ -237,8 +240,8 @@ export function handleRequest(ctx: RequestContext) {
     case OP.SetSelectionOwner: return onSetSelectionOwner(ctx);
     case OP.GrabPointer: return onGrabPointer(ctx);
     case OP.UngrabPointer: return onUngrabPointer(ctx);
-    case OP.GrabButton: return; // passive grab; treated as no-op for now
-    case OP.UngrabButton: return;
+    case OP.GrabButton: return onGrabButton(ctx);
+    case OP.UngrabButton: return onUngrabButton(ctx);
     case OP.GrabKeyboard: return onGrabKeyboard(ctx);
     case OP.UngrabKeyboard: return;
     case OP.GrabKey: return; // passive key grab
@@ -911,6 +914,37 @@ function onUngrabPointer(ctx: RequestContext) {
   const grab = ctx.getActiveGrab();
   if (!grab || grab.client !== ctx.clientId) return;
   ctx.setActiveGrab(undefined);
+}
+
+function onGrabButton(ctx: RequestContext) {
+  // Layout:
+  //   byte 1   owner_events (passed via requestData)
+  //   2..3     request length
+  //   4..7     grab_window
+  //   8..9     event_mask
+  //   10       pointer_mode
+  //   11       keyboard_mode
+  //   12..15   confine_to
+  //   16..19   cursor
+  //   20       button (0 = AnyButton)
+  //   21       pad
+  //   22..23   modifiers (0x8000 = AnyModifier)
+  const v = reqView(ctx); const le = ctx.littleEndian;
+  const ownerEvents = ctx.requestData !== 0;
+  const grabWindow = v.getUint32(4, le);
+  const eventMask = v.getUint16(8, le);
+  const button = v.getUint8(20);
+  const modifiers = v.getUint16(22, le);
+  ctx.addPassiveButtonGrab(grabWindow, button, modifiers, eventMask, ownerEvents, ctx.clientId);
+}
+
+function onUngrabButton(ctx: RequestContext) {
+  // Layout: byte 1 = button (data), bytes 4..7 = grab_window, 8..9 = modifiers.
+  const v = reqView(ctx); const le = ctx.littleEndian;
+  const button = ctx.requestData;
+  const grabWindow = v.getUint32(4, le);
+  const modifiers = v.getUint16(8, le);
+  ctx.removePassiveButtonGrab(grabWindow, button, modifiers);
 }
 
 function onGrabKeyboard(ctx: RequestContext) {

@@ -35,6 +35,17 @@ export class XServer {
   private modifierState = 0;          // Shift/Lock/Control/Mod1 bits
   private windowUnderPointer = 0;     // 0 = root
   private activeGrab: PointerGrab | undefined = undefined;
+  // Passive button grabs: mate-panel installs these on its top-level window
+  // for the Applications/Places/System buttons. Without honoring them, the
+  // panel's eventMask doesn't include ButtonPress and clicks vanish.
+  // Keyed by window id; matched on (button, modifiers) at press time.
+  private passiveButtonGrabs = new Map<number, Array<{
+    button: number;          // 0 = AnyButton
+    modifiers: number;       // 0x8000 = AnyModifier
+    eventMask: number;
+    ownerEvents: boolean;
+    client: number;
+  }>>();
 
   onSend: (clientId: number, bytes: Uint8Array) => void = () => {};
   onCloseClient: (clientId: number) => void = () => {};
@@ -166,12 +177,98 @@ export class XServer {
     if (this.activeGrab) {
       const target = this.pickGrabTarget(eventMask);
       if (target) this.emit(target, pressed ? 4 : 5, button, this.activeGrab.client, stateBefore);
+      // Auto-release passive-grab promotion on the matching button release.
+      if (!pressed && this.activeGrab.fromPassiveGrab && this.activeGrab.passiveButton === button) {
+        this.activeGrab = undefined;
+      }
       return;
     }
 
     const hit = this.windowAt(this.pointerX, this.pointerY);
     if (!hit) return;
-    if (hit.eventMask & eventMask) this.emit(hit, pressed ? 4 : 5, button, hit.owner, stateBefore);
+
+    // On ButtonPress, check for a passive button grab on the hit window or any
+    // ancestor. Mate-panel uses these for Applications/Places/System menus;
+    // GTK menus use them for menu item activation. If a matching grab exists,
+    // promote it to an active grab and deliver the press to the grab window.
+    if (pressed) {
+      const promoted = this.findPassiveButtonGrab(hit, button, stateBefore);
+      if (promoted) {
+        this.activeGrab = {
+          client: promoted.grab.client,
+          window: promoted.window.id,
+          eventMask: promoted.grab.eventMask,
+          ownerEvents: promoted.grab.ownerEvents,
+          fromPassiveGrab: true,
+          passiveButton: button,
+        };
+        this.emit(promoted.window, 4 /* ButtonPress */, button, promoted.grab.client, stateBefore);
+        return;
+      }
+    }
+
+    // Per X11 spec, pointer events propagate up the window tree if the leaf
+    // window doesn't have the event selected.
+    let cur: Window | undefined = hit;
+    while (cur) {
+      if (cur.eventMask & eventMask) {
+        this.emit(cur, pressed ? 4 : 5, button, cur.owner, stateBefore);
+        return;
+      }
+      if (cur.id === ROOT_WINDOW_ID) break;
+      cur = this.windows.get(cur.parent);
+    }
+  }
+
+  /** Walk hit→ancestors looking for a passive button grab whose (button,
+   *  modifiers) matches the press. Returns the grab + the window it was
+   *  installed on (delivery target). */
+  private findPassiveButtonGrab(hit: Window, button: number, state: number)
+      : { grab: { client: number; eventMask: number; ownerEvents: boolean }; window: Window } | undefined {
+    // X masks the press modifiers against ~LockMask + ~NumLockMask before
+    // matching; we keep it simple — Lock (bit 1) is ignored, everything else
+    // must equal-match unless the grab uses AnyModifier (0x8000).
+    const effectiveMods = state & ~0x02 & 0xffff;
+    let cur: Window | undefined = hit;
+    while (cur) {
+      const grabs = this.passiveButtonGrabs.get(cur.id);
+      if (grabs) {
+        for (const g of grabs) {
+          const buttonMatch = g.button === 0 /* AnyButton */ || g.button === button;
+          const modsMatch = g.modifiers === 0x8000 /* AnyModifier */ || g.modifiers === effectiveMods;
+          if (buttonMatch && modsMatch) {
+            return { grab: g, window: cur };
+          }
+        }
+      }
+      if (cur.id === ROOT_WINDOW_ID) break;
+      cur = this.windows.get(cur.parent);
+    }
+    return undefined;
+  }
+
+  addPassiveButtonGrab(window: number, button: number, modifiers: number,
+                       eventMask: number, ownerEvents: boolean, client: number) {
+    let list = this.passiveButtonGrabs.get(window);
+    if (!list) { list = []; this.passiveButtonGrabs.set(window, list); }
+    // Replace any existing (button, modifiers) grab on this window.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const g = list[i]!;
+      if (g.button === button && g.modifiers === modifiers) list.splice(i, 1);
+    }
+    list.push({ button, modifiers, eventMask, ownerEvents, client });
+  }
+
+  removePassiveButtonGrab(window: number, button: number, modifiers: number) {
+    const list = this.passiveButtonGrabs.get(window);
+    if (!list) return;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const g = list[i]!;
+      const btnMatch = button === 0 || g.button === 0 || g.button === button;
+      const modMatch = modifiers === 0x8000 || g.modifiers === 0x8000 || g.modifiers === modifiers;
+      if (btnMatch && modMatch) list.splice(i, 1);
+    }
+    if (list.length === 0) this.passiveButtonGrabs.delete(window);
   }
 
   /**
@@ -363,6 +460,10 @@ export class XServer {
         },
         setActiveGrab: (g) => this.setActiveGrab(g),
         getActiveGrab: () => this.getActiveGrab(),
+        addPassiveButtonGrab: (w, btn, mods, em, oe, cl) =>
+          this.addPassiveButtonGrab(w, btn, mods, em, oe, cl),
+        removePassiveButtonGrab: (w, btn, mods) =>
+          this.removePassiveButtonGrab(w, btn, mods),
         pointerX: this.pointerX,
         pointerY: this.pointerY,
         buttonState: this.buttonState | this.modifierState,

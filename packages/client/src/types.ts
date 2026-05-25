@@ -50,6 +50,11 @@ export class Window {
   readonly ctx: OffscreenCanvasRenderingContext2D;
   readonly properties = new Map<number, PropertyValue>();
   mapped = false;
+  // Union of every client's selected event mask. We OR new selections in
+  // rather than overwriting, so that one client (e.g. marco) selecting
+  // SubstructureNotify on the panel doesn't wipe out the panel-owner's
+  // ButtonPress selection. A real X server tracks per-client masks; we
+  // settle for the union plus per-event routing to the window owner.
   eventMask = 0;
   owner = 0;
   overrideRedirect = false;
@@ -96,6 +101,10 @@ export interface PointerGrab {
   window: number;
   eventMask: number;
   ownerEvents: boolean;
+  // True when this grab was activated by a passive button grab firing on a
+  // ButtonPress. In that case it auto-releases on the matching ButtonRelease.
+  fromPassiveGrab?: boolean;
+  passiveButton?: number;
 }
 
 // X11 event mask bits (subset)

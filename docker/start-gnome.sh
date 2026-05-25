@@ -14,14 +14,14 @@ set -eu
 eval "$(dbus-launch --sh-syntax --exit-with-session)"
 export DBUS_SESSION_BUS_ADDRESS
 
-# 2. Window manager: marco, mate's own WM. Unlike fvwm, marco honors
-#    _NET_WM_WINDOW_TYPE_DOCK and skips reparenting/decorating the panel
-#    (fvwm was creating an empty frame the same size as the panel that
-#    stacked above and intercepted every click).
+# 2. Window manager: metacity, gnome 2's reference WM.
+#    Tried fvwm (creates empty ghost frames that block panel clicks)
+#    and marco (positions DOCK panels at y=-24/y=768 — entirely off
+#    screen). metacity is mature and predictable.
 #
-#    --sm-disable: don't try to register with a session manager we don't
-#    have (otherwise marco hangs waiting for a reply).
-marco --sm-disable --no-force-fullscreen &
+#    --sm-disable: skip session manager registration we don't have.
+#    --no-composite: skip compositing (we don't render shadows etc).
+metacity --sm-disable --no-composite &
 sleep 1
 
 # 3. MATE panel (GNOME 2 fork) — uses the same XDG menu data as gnome-panel
