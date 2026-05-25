@@ -1940,12 +1940,31 @@ function onConfigureWindow(ctx: RequestContext) {
     win.paintBackground(0, 0, win.width, win.height);
   }
   // Stack-mode: 0=Above, 1=Below, 2=TopIf, 3=BottomIf, 4=Opposite.
-  // We approximate TopIf/Opposite as Above (most common case is raise-on-focus).
+  //
+  // metacity surprises us with sibling-relative restacking that picks a low
+  // window (e.g. mate-panel's bottom strut at stack ≈ 78) as the reference,
+  // then says "Above sibling=that". With exact sibling-relative semantics we
+  // place the new app just-above that low window, still below the terminal.
+  //
+  // Practical compromise for top-level (root-child) windows: treat Above as
+  // "raise to top" regardless of sibling — that's what users expect when they
+  // launch an app from a menu, and metacity's sibling reference is internal
+  // bookkeeping, not user intent. We still honor Above-sibling for nested
+  // windows (sub-widgets, override-redirect popups).
   if (valueMask & 0x040) {
+    const siblingWin = sibling ? ctx.windows.get(sibling) : undefined;
+    const isTopLevel = win.parent === ctx.rootWindowId;
     if (stackMode === 1 /* Below */ || stackMode === 3 /* BottomIf */) {
-      win.stackOrder = --lowestStackOrder;
+      if (siblingWin && !isTopLevel) {
+        win.stackOrder = siblingWin.stackOrder - 0.5;
+      }
+      // Top-level Below: ignore — metacity demotes fresh windows this way.
     } else {
-      win.stackOrder = nextStackOrder++;
+      if (siblingWin && !isTopLevel) {
+        win.stackOrder = siblingWin.stackOrder + 0.5;
+      } else {
+        win.stackOrder = nextStackOrder++;
+      }
     }
   }
   ctx.renderer.invalidate();
