@@ -13,7 +13,11 @@ services:
     environment:
       DISPLAY_NUM: "0"
       WS_PORT: "9090"
-      AUTORUN_ARGS: "-sb -sl 5000"
+      # AUTORUN_CMD defaults to /usr/local/bin/start-gnome (set in Dockerfile),
+      # which brings up fvwm + gnome-panel + mate-terminal on connect.
+      # To revert to the xterm-only behavior:
+      #   AUTORUN_CMD: "xterm"
+      #   AUTORUN_ARGS: "-sb -sl 5000"
 
   apps:
     build:

@@ -7,6 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xterm \
         twm \
         fvwm \
+        dbus dbus-x11 \
+        gnome-panel gnome-menus \
+        gnome-mahjongg gnome-mines gnome-tetravex \
+        mate-panel mate-terminal \
+        at-spi2-core \
     && rm -rf /var/lib/apt/lists/*
 
 # fvwm needs a config to do anything; without it it sits silently.
@@ -26,11 +31,15 @@ RUN corepack enable && corepack prepare yarn@1.22.22 --activate
 # from modern WMs.
 RUN printf 'RandomPlacement\nNoTitleFocus\n\nFunction "raise-then-move" {\n  f.raise\n  f.move\n}\nButton1 = : title : f.function "raise-then-move"\nButton1 = : frame : f.raise\n' > /root/.twmrc
 
+COPY docker/start-gnome.sh /usr/local/bin/start-gnome
+RUN chmod +x /usr/local/bin/start-gnome
+
 WORKDIR /app
 
 ENV DISPLAY=:0
 ENV DISPLAY_NUM=0
 ENV WS_PORT=9090
+ENV AUTORUN_CMD=/usr/local/bin/start-gnome
 EXPOSE 9090
 
 CMD ["sh", "-lc", "yarn install && yarn workspace @x11-js/server dev"]
