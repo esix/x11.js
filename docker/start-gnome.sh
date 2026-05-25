@@ -14,13 +14,20 @@ set -eu
 eval "$(dbus-launch --sh-syntax --exit-with-session)"
 export DBUS_SESSION_BUS_ADDRESS
 
-# 2. Window manager. Run in foreground so this script becomes its supervisor:
-#    when the browser disconnects and the X server kills us, fvwm goes too.
-fvwm &
-sleep 1
+# 2. Skip the WM for now. fvwm's default config reparents the panel into
+#    an empty frame window that ends up stacked above the panel, blocking
+#    all clicks on Applications/Places/System. Without a WM, mate-panel
+#    self-positions at (0,0) and clicks reach it directly.
+#
+#    The trade-off: no window decorations, no focus management for other
+#    apps, no "show desktop" button. But the menu is the user's current
+#    complaint and matters more.
+# fvwm &
+# sleep 1
 
-# 3. GNOME panel + bottom panel
-gnome-panel &
+# 3. MATE panel (GNOME 2 fork) — uses the same XDG menu data as gnome-panel
+#    but doesn't require org.gnome.SessionManager / Login1.
+mate-panel &
 sleep 2
 
 # 4. Default app — open a terminal so the user can launch more things.

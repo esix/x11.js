@@ -17,6 +17,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # fvwm needs a config to do anything; without it it sits silently.
 RUN mkdir -p /root/.fvwm && cp /usr/share/fvwm2/default-config/config /root/.fvwm/config
 
+# Override: leave panel windows COMPLETELY unmanaged so fvwm doesn't
+# wrap them in a frame that intercepts clicks. The default fvwm config
+# decorates everything with a Mwm-style title bar + borders which sits
+# on top of the panel content, swallowing all clicks at y < ~25.
+#
+# Style ... NoTitle, !Borders just hides the decorations visually but
+# leaves the reparenting frame in place. We need !UseDecor to skip the
+# frame entirely.
+RUN cat >> /root/.fvwm/config <<'EOF'
+
+# Dock-style panels — fvwm should not wrap these in a frame at all,
+# otherwise the empty frame window covers the panel and steals clicks.
+Style "*-panel"     !Title, !Borders, !Handles, Sticky, StaysOnTop, FixedSize, CirculateSkip, WindowListSkip
+Style "Mate-panel"  !Title, !Borders, !Handles, Sticky, StaysOnTop, FixedSize, CirculateSkip, WindowListSkip
+Style "Gnome-panel" !Title, !Borders, !Handles, Sticky, StaysOnTop, FixedSize, CirculateSkip, WindowListSkip
+EOF
+
 # X resources so toolkit apps (XEmacs, Athena, Lucid) default to a light
 # bg/dark fg instead of XEmacs's grey-on-grey-on-grey 3D shading that's
 # nearly invisible against our minimal visual.
