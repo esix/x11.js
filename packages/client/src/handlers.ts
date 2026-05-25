@@ -2088,7 +2088,7 @@ function onQueryExtension(ctx: RequestContext) {
     major = RENDER_MAJOR_OPCODE;
     firstEvent = RENDER_FIRST_EVENT;
     firstError = RENDER_FIRST_ERROR;
-  } else if (name === 'XInputExtension') {
+  } else if (name === 'XInputExtension' && (globalThis as any).__disable_xi2 !== true) {
     present = 1;
     major = XINPUT_MAJOR_OPCODE;
     firstEvent = XINPUT_FIRST_EVENT;

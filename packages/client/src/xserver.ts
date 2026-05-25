@@ -130,6 +130,14 @@ export class XServer {
     const motionMask = EVENT_MASK.PointerMotion |
       (this.buttonState ? (EVENT_MASK.ButtonMotion | (this.buttonState & 0x1f00)) : 0);
 
+    // Crossing events (Enter/Leave) flow during pointer grabs too — GTK menus
+    // grab the pointer when they open and rely on Enter/Leave to highlight
+    // the menu item under the pointer. Without these, clicks land but the
+    // menu doesn't know which item the pointer is over and nothing activates.
+    const hit = this.windowAt(rootX, rootY);
+    this.maybeCrossing(hit);
+    this.windowUnderPointer = hit?.id ?? 0;
+
     if (this.activeGrab) {
       const target = this.pickGrabTarget(motionMask);
       if (target) this.emit(target, 6, 0, this.activeGrab.client);
@@ -137,9 +145,6 @@ export class XServer {
       return;
     }
 
-    const hit = this.windowAt(rootX, rootY);
-    this.maybeCrossing(hit);
-    this.windowUnderPointer = hit?.id ?? 0;
     if (hit && (hit.eventMask & motionMask)) {
       this.emit(hit, 6 /* MotionNotify */, 0);
     }
@@ -330,11 +335,43 @@ export class XServer {
     if ((now?.id ?? 0) === this.windowUnderPointer) return;
     const prev = this.windows.get(this.windowUnderPointer);
     if (prev && (prev.eventMask & EVENT_MASK.LeaveWindow)) {
-      this.emit(prev, 8 /* LeaveNotify */, 0);
+      this.emitCrossing(prev, 8 /* LeaveNotify */);
     }
     if (now && (now.eventMask & EVENT_MASK.EnterWindow)) {
-      this.emit(now, 7 /* EnterNotify */, 0);
+      this.emitCrossing(now, 7 /* EnterNotify */);
     }
+  }
+
+  /** Crossing-event (Enter/Leave) emit. These events have `mode` at byte 30
+   *  and `focus|same_screen` at byte 31 — different from button/motion which
+   *  put `same_screen` at byte 30. Using {@link emit} for crossings made GTK
+   *  read every Enter as Mode=Grab and stopped menu hover from updating. */
+  private emitCrossing(win: Window, type: 7 | 8) {
+    const s = this.clients.get(win.owner);
+    if (!s) return;
+    const sp = this.screenPosOf(win.id);
+    const ex = this.pointerX - sp.x;
+    const ey = this.pointerY - sp.y;
+    // mode field: 0=Normal, 1=Grab (on grab activate), 2=Ungrab (on grab end).
+    // X has a 3=WhileGrabbed value too but GDK's crossing-mode translator
+    // aborts on it ("code should not be reached") — so we just send Normal
+    // for owner-events crossings inside an in-progress grab.
+    const mode = 0;
+    const w = new Writer(32, s.littleEndian);
+    w.card8(type);
+    w.card8(0);                        // detail: Ancestor (good enough for siblings)
+    w.card16(s.sequence);
+    w.card32(Date.now() & 0xffffffff);
+    w.card32(ROOT_WINDOW_ID);
+    w.card32(win.id);
+    w.card32(0);                       // child
+    w.int16(this.pointerX); w.int16(this.pointerY);
+    w.int16(ex); w.int16(ey);
+    const state = this.buttonState | this.modifierState;
+    w.card16(state & 0xffff);
+    w.card8(mode);                     // mode (byte 30)
+    w.card8(1);                        // flags: same_screen=1, focus=0 (byte 31)
+    this.onSend(win.owner, w.finish());
   }
 
   private windowAt(x: number, y: number): Window | undefined {
