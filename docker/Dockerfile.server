@@ -7,10 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xterm \
         twm \
         fvwm \
+        marco \
         dbus dbus-x11 \
         gnome-panel gnome-menus \
         gnome-mahjongg gnome-mines gnome-tetravex \
         mate-panel mate-terminal \
+        mate-settings-daemon-common mate-control-center-common \
         at-spi2-core \
     && rm -rf /var/lib/apt/lists/*
 
