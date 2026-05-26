@@ -443,24 +443,25 @@ export class XServer {
   }
 
   private windowAt(x: number, y: number): Window | undefined {
-    // Walk the window tree from root, accumulating parent offsets. The deepest
-    // mapped window containing (x, y) is the topmost in z-order — that's the
-    // X11 hit-test rule.
-    let best: Window | undefined;
-    const visit = (parentId: number, ox: number, oy: number) => {
+    // X11 hit-test: at each level, among the mapped children containing (x, y),
+    // the one highest in z-order wins; then descend into it. We MUST sort by
+    // stackOrder here — relying on Map insertion order is wrong once windows
+    // overlap across stacking changes. (Bug seen: an Applications submenu and a
+    // game window both covered the pointer; insertion order returned the game,
+    // so menu hover/clicks were delivered to the wrong window.)
+    const pick = (parentId: number, ox: number, oy: number): Window | undefined => {
+      let top: Window | undefined;
       for (const w of this.windows.values()) {
-        if (w.parent !== parentId) continue;
-        if (!w.mapped) continue;
-        const ax = ox + w.x;
-        const ay = oy + w.y;
-        if (x < ax || y < ay) continue;
-        if (x >= ax + w.width || y >= ay + w.height) continue;
-        best = w;
-        visit(w.id, ax, ay);
+        if (w.parent !== parentId || !w.mapped) continue;
+        const ax = ox + w.x, ay = oy + w.y;
+        if (x < ax || y < ay || x >= ax + w.width || y >= ay + w.height) continue;
+        if (!top || w.stackOrder > top.stackOrder) top = w;
       }
+      if (!top) return undefined;
+      const deeper = pick(top.id, ox + top.x, oy + top.y);
+      return deeper ?? top;
     };
-    visit(ROOT_WINDOW_ID, 0, 0);
-    return best;
+    return pick(ROOT_WINDOW_ID, 0, 0);
   }
 
   /** Absolute screen position of `wid` accumulated through its parents. */
