@@ -21,6 +21,17 @@ export PATH="$PATH:/usr/games"
 eval "$(dbus-launch --sh-syntax --exit-with-session)"
 export DBUS_SESSION_BUS_ADDRESS
 
+# 1b. Clean up the default mate-panel top-panel layout. The shipped default
+#     adds 4 launchers + a drawer at the start edge. Their icons fail to load
+#     in this minimal image, so they render blank but still reserve ~240px and
+#     push the "Applications/Places/System" menu-bar applet into its overflow
+#     state — it collapses to a lone chevron with no visible text. Keeping only
+#     the menu-bar + clock + window-list + show-desktop gives a clean panel
+#     where the menu bar renders its labels. Best-effort (|| true): never let a
+#     gsettings hiccup abort the session.
+gsettings set org.mate.panel object-id-list \
+  "['menu-bar', 'clock', 'window-list', 'show-desktop']" 2>/dev/null || true
+
 # 2. Window manager: metacity, gnome 2's reference WM.
 #    Tried fvwm (creates empty ghost frames that block panel clicks)
 #    and marco (positions DOCK panels at y=-24/y=768 — entirely off

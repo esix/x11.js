@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         mate-panel mate-terminal \
         mate-settings-daemon-common mate-control-center-common \
         at-spi2-core \
+        libglib2.0-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # fvwm needs a config to do anything; without it it sits silently.
