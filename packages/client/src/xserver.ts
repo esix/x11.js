@@ -45,7 +45,21 @@ export class XServer {
     eventMask: number;
     ownerEvents: boolean;
     client: number;
+    pointerMode: number;     // 0 = Synchronous, 1 = Asynchronous
   }>>();
+  // A Synchronous passive grab that has fired and is now waiting for the
+  // grabbing client to call AllowEvents. metacity uses this for click-to-focus:
+  // it grabs Button1 (Sync) on every managed window, receives the press,
+  // focuses the window, then calls AllowEvents(ReplayPointer) to let the click
+  // reach the application. Until then the pointer is "frozen" and we hold the
+  // info needed to replay the press (and a release if it arrives meanwhile).
+  private frozenSyncGrab: {
+    grabClient: number;
+    button: number;
+    replayHit: Window;       // window the press would reach without the grab
+    stateBefore: number;
+    releaseQueued: boolean;
+  } | undefined = undefined;
 
   onSend: (clientId: number, bytes: Uint8Array) => void = () => {};
   onCloseClient: (clientId: number) => void = () => {};
@@ -179,6 +193,16 @@ export class XServer {
 
     const eventMask = pressed ? EVENT_MASK.ButtonPress : EVENT_MASK.ButtonRelease;
 
+    // Pointer is frozen by a Synchronous passive grab waiting on AllowEvents.
+    // Hold the release so it can be replayed to the app after the grabbing
+    // client (e.g. metacity) calls AllowEvents(ReplayPointer).
+    if (this.frozenSyncGrab) {
+      if (!pressed && this.frozenSyncGrab.button === button) {
+        this.frozenSyncGrab.releaseQueued = true;
+      }
+      return;
+    }
+
     if (this.activeGrab) {
       const target = this.pickGrabTarget(eventMask);
       if (target) this.emit(target, pressed ? 4 : 5, button, this.activeGrab.client, stateBefore);
@@ -193,31 +217,51 @@ export class XServer {
     if (!hit) return;
 
     // On ButtonPress, check for a passive button grab on the hit window or any
-    // ancestor. Mate-panel uses these for Applications/Places/System menus;
-    // GTK menus use them for menu item activation. If a matching grab exists,
-    // promote it to an active grab and deliver the press to the grab window.
+    // ancestor. Two kinds matter here:
+    //   - Asynchronous grabs (GTK menu activation): promote to an active grab
+    //     and deliver to the grab window; events keep flowing.
+    //   - Synchronous grabs (metacity click-to-focus): deliver the press to the
+    //     grabbing client, then FREEZE until it calls AllowEvents. On
+    //     ReplayPointer we re-deliver this press to the application, so the
+    //     click is not swallowed by the WM's focus grab.
     if (pressed) {
       const promoted = this.findPassiveButtonGrab(hit, button, stateBefore);
       if (promoted) {
-        this.activeGrab = {
-          client: promoted.grab.client,
-          window: promoted.window.id,
-          eventMask: promoted.grab.eventMask,
-          ownerEvents: promoted.grab.ownerEvents,
-          fromPassiveGrab: true,
-          passiveButton: button,
-        };
         this.emit(promoted.window, 4 /* ButtonPress */, button, promoted.grab.client, stateBefore);
+        if (promoted.grab.pointerMode === 0 /* Synchronous */) {
+          this.frozenSyncGrab = {
+            grabClient: promoted.grab.client,
+            button,
+            replayHit: hit,
+            stateBefore,
+            releaseQueued: false,
+          };
+        } else {
+          this.activeGrab = {
+            client: promoted.grab.client,
+            window: promoted.window.id,
+            eventMask: promoted.grab.eventMask,
+            ownerEvents: promoted.grab.ownerEvents,
+            fromPassiveGrab: true,
+            passiveButton: button,
+          };
+        }
         return;
       }
     }
 
-    // Per X11 spec, pointer events propagate up the window tree if the leaf
-    // window doesn't have the event selected.
+    this.deliverButtonToApp(hit, button, pressed, stateBefore);
+  }
+
+  /** Deliver a button event by walking hit→ancestors to the first window that
+   *  selected it (X11 propagation), ignoring passive grabs. Used both for
+   *  normal delivery and for replaying a press after AllowEvents(ReplayPointer). */
+  private deliverButtonToApp(hit: Window, button: number, pressed: boolean, state: number) {
+    const eventMask = pressed ? EVENT_MASK.ButtonPress : EVENT_MASK.ButtonRelease;
     let cur: Window | undefined = hit;
     while (cur) {
       if (cur.eventMask & eventMask) {
-        this.emit(cur, pressed ? 4 : 5, button, cur.owner, stateBefore);
+        this.emit(cur, pressed ? 4 : 5, button, cur.owner, state);
         return;
       }
       if (cur.id === ROOT_WINDOW_ID) break;
@@ -225,11 +269,32 @@ export class XServer {
     }
   }
 
+  /**
+   * AllowEvents (opcode 53). We only act on ReplayPointer (mode 2): release the
+   * frozen synchronous grab and replay the triggering press — and any release
+   * that arrived while frozen — to the application as if the grab never
+   * happened. Other modes just thaw. This is what makes metacity's
+   * click-to-focus pass the click through to the app (e.g. gnome-mines'
+   * difficulty buttons).
+   */
+  allowEvents(mode: number) {
+    const frozen = this.frozenSyncGrab;
+    if (!frozen) return;
+    this.frozenSyncGrab = undefined;
+    if (mode === 2 /* ReplayPointer */) {
+      this.deliverButtonToApp(frozen.replayHit, frozen.button, true, frozen.stateBefore);
+      if (frozen.releaseQueued) {
+        const relState = frozen.stateBefore | (1 << (7 + frozen.button));
+        this.deliverButtonToApp(frozen.replayHit, frozen.button, false, relState);
+      }
+    }
+  }
+
   /** Walk hit→ancestors looking for a passive button grab whose (button,
    *  modifiers) matches the press. Returns the grab + the window it was
    *  installed on (delivery target). */
   private findPassiveButtonGrab(hit: Window, button: number, state: number)
-      : { grab: { client: number; eventMask: number; ownerEvents: boolean }; window: Window } | undefined {
+      : { grab: { client: number; eventMask: number; ownerEvents: boolean; pointerMode: number }; window: Window } | undefined {
     // X masks the press modifiers against ~LockMask + ~NumLockMask before
     // matching; we keep it simple — Lock (bit 1) is ignored, everything else
     // must equal-match unless the grab uses AnyModifier (0x8000).
@@ -253,7 +318,8 @@ export class XServer {
   }
 
   addPassiveButtonGrab(window: number, button: number, modifiers: number,
-                       eventMask: number, ownerEvents: boolean, client: number) {
+                       eventMask: number, ownerEvents: boolean, client: number,
+                       pointerMode: number) {
     let list = this.passiveButtonGrabs.get(window);
     if (!list) { list = []; this.passiveButtonGrabs.set(window, list); }
     // Replace any existing (button, modifiers) grab on this window.
@@ -261,7 +327,7 @@ export class XServer {
       const g = list[i]!;
       if (g.button === button && g.modifiers === modifiers) list.splice(i, 1);
     }
-    list.push({ button, modifiers, eventMask, ownerEvents, client });
+    list.push({ button, modifiers, eventMask, ownerEvents, client, pointerMode });
   }
 
   removePassiveButtonGrab(window: number, button: number, modifiers: number) {
@@ -499,10 +565,11 @@ export class XServer {
         },
         setActiveGrab: (g) => this.setActiveGrab(g),
         getActiveGrab: () => this.getActiveGrab(),
-        addPassiveButtonGrab: (w, btn, mods, em, oe, cl) =>
-          this.addPassiveButtonGrab(w, btn, mods, em, oe, cl),
+        addPassiveButtonGrab: (w, btn, mods, em, oe, cl, pm) =>
+          this.addPassiveButtonGrab(w, btn, mods, em, oe, cl, pm),
         removePassiveButtonGrab: (w, btn, mods) =>
           this.removePassiveButtonGrab(w, btn, mods),
+        allowEvents: (mode) => this.allowEvents(mode),
         pointerX: this.pointerX,
         pointerY: this.pointerY,
         buttonState: this.buttonState | this.modifierState,

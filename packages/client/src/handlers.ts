@@ -48,6 +48,7 @@ const OP = {
   UngrabKeyboard: 32,
   GrabKey: 33,
   UngrabKey: 34,
+  AllowEvents: 35,
   ConfigureWindow: 12,
   TranslateCoordinates: 40,
   OpenFont: 45,
@@ -151,8 +152,10 @@ export interface RequestContext {
   setActiveGrab: (grab: PointerGrab | undefined) => void;
   getActiveGrab: () => PointerGrab | undefined;
   addPassiveButtonGrab: (window: number, button: number, modifiers: number,
-                         eventMask: number, ownerEvents: boolean, client: number) => void;
+                         eventMask: number, ownerEvents: boolean, client: number,
+                         pointerMode: number) => void;
   removePassiveButtonGrab: (window: number, button: number, modifiers: number) => void;
+  allowEvents: (mode: number) => void;
   pointerX: number;
   pointerY: number;
   buttonState: number;
@@ -246,6 +249,7 @@ export function handleRequest(ctx: RequestContext) {
     case OP.UngrabKeyboard: return;
     case OP.GrabKey: return; // passive key grab
     case OP.UngrabKey: return;
+    case OP.AllowEvents: return onAllowEvents(ctx);
     case OP.ChangeActivePointerGrab: return; // no-op
     case OP.ConfigureWindow: return onConfigureWindow(ctx);
     case OP.TranslateCoordinates: return onTranslateCoordinates(ctx);
@@ -960,9 +964,10 @@ function onGrabButton(ctx: RequestContext) {
   const ownerEvents = ctx.requestData !== 0;
   const grabWindow = v.getUint32(4, le);
   const eventMask = v.getUint16(8, le);
+  const pointerMode = v.getUint8(10);   // 0 = Synchronous, 1 = Asynchronous
   const button = v.getUint8(20);
   const modifiers = v.getUint16(22, le);
-  ctx.addPassiveButtonGrab(grabWindow, button, modifiers, eventMask, ownerEvents, ctx.clientId);
+  ctx.addPassiveButtonGrab(grabWindow, button, modifiers, eventMask, ownerEvents, ctx.clientId, pointerMode);
 }
 
 function onUngrabButton(ctx: RequestContext) {
@@ -972,6 +977,13 @@ function onUngrabButton(ctx: RequestContext) {
   const grabWindow = v.getUint32(4, le);
   const modifiers = v.getUint16(8, le);
   ctx.removePassiveButtonGrab(grabWindow, button, modifiers);
+}
+
+function onAllowEvents(ctx: RequestContext) {
+  // byte 1 (requestData) = mode. We care about ReplayPointer (2): replay the
+  // press held by a frozen Synchronous grab to the application. metacity does
+  // this after deciding focus, so the click reaches the app.
+  ctx.allowEvents(ctx.requestData);
 }
 
 function onGrabKeyboard(ctx: RequestContext) {
