@@ -370,7 +370,9 @@ export class XServer {
     const state = this.buttonState | this.modifierState;
     w.card16(state & 0xffff);
     w.card8(mode);                     // mode (byte 30)
-    w.card8(1);                        // flags: same_screen=1, focus=0 (byte 31)
+    // byte 31 flags: bit0 (0x01)=focus, bit1 (0x02)=same-screen. We're always
+    // on one screen and don't model X input focus here, so set same-screen.
+    w.card8(0x02);
     this.onSend(win.owner, w.finish());
   }
 

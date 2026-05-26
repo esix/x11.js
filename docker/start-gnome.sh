@@ -10,6 +10,13 @@
 
 set -eu
 
+# 0. Make sure /usr/games is on PATH. Debian installs gnome-mahjongg,
+#    gnome-mines, gnome-tetravex (and other games) into /usr/games, which is
+#    NOT on the default container PATH. mate-panel inherits this PATH and
+#    passes it to the apps it spawns, so without this every game menu entry
+#    fails its Exec lookup silently — "click the item, nothing happens".
+export PATH="$PATH:/usr/games"
+
 # 1. Session D-Bus — gnome-panel + most GTK apps refuse to start without it.
 eval "$(dbus-launch --sh-syntax --exit-with-session)"
 export DBUS_SESSION_BUS_ADDRESS
