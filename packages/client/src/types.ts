@@ -56,6 +56,11 @@ export class Window {
    *  in `applyWindowValueMask` so the WM can't accidentally clear the
    *  window owner's ButtonPress selection. */
   eventMask = 0;
+  /** Per-client event masks, used to route events that must reach a client
+   *  other than the window owner — e.g. PropertyNotify to a GtkSocket
+   *  (mate-panel) watching a GtkPlug (applet) it doesn't own, which is how
+   *  panel applets negotiate their size. Maintained alongside `eventMask`. */
+  readonly clientMasks = new Map<number, number>();
   owner = 0;
   overrideRedirect = false;
   substructureRedirectClient: number | undefined = undefined;

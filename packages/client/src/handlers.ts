@@ -399,6 +399,11 @@ function applyWindowValueMask(
         // ButtonPress from getting it back.
         const preserveOld = (requester !== win.owner) ? (win.eventMask & INPUT_PRESERVE) : 0;
         win.eventMask = val | preserveOld;
+        // Record this client's exact selection so events that must reach a
+        // non-owner selector (e.g. PropertyNotify to a GtkSocket watching a
+        // GtkPlug it doesn't own) can be routed correctly.
+        if (val === 0) win.clientMasks.delete(requester);
+        else win.clientMasks.set(requester, val);
         // Track who selected SubstructureRedirect / SubstructureNotify so
         // we can redirect their events and notify the right client.
         if (val & EVENT_MASK.SubstructureRedirect) {
@@ -717,9 +722,26 @@ function onChangeProperty(ctx: RequestContext) {
   // PropertyNotify — fvwm and ICCCM-aware apps use property changes as a
   // wake-up mechanism. Without this event, fvwm sits in initialization
   // forever waiting on its own anchor window's property change.
-  if (win.eventMask & EVENT_MASK.PropertyChange) {
-    sendPropertyNotify(ctx, win.owner, win.id, property, 0 /* state=NewValue */);
+  //
+  // Deliver to EVERY client that selected PropertyChange on this window, not
+  // just the owner. A GtkSocket (mate-panel) watches the WM_NORMAL_HINTS of a
+  // GtkPlug (panel applet) it doesn't own; that PropertyNotify is how it learns
+  // the applet's size and grows the socket. Without it, applets stay 1px wide
+  // and the bottom panel (window list, show-desktop) looks empty.
+  for (const cid of clientsSelecting(win, EVENT_MASK.PropertyChange)) {
+    sendPropertyNotify(ctx, cid, win.id, property, 0 /* state=NewValue */);
   }
+}
+
+/** Clients that selected any of `bits` on `win`. Falls back to the owner when
+ *  no per-client masks are recorded (older code paths that only set the union). */
+function clientsSelecting(win: Window, bits: number): number[] {
+  const out: number[] = [];
+  for (const [cid, m] of win.clientMasks) {
+    if (m & bits) out.push(cid);
+  }
+  if (out.length === 0 && (win.eventMask & bits)) out.push(win.owner);
+  return out;
 }
 
 function sendPropertyNotify(ctx: RequestContext, target: number, window: number, atom: number, state: number) {
