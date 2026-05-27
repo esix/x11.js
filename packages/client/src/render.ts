@@ -43,6 +43,11 @@ export interface Picture {
   format: number;     // PICT_FORMAT_*
   owner: number;
   clipRects?: Array<{ x: number; y: number; w: number; h: number }>;
+  // CPClipMask (ChangePicture): a pixmap whose coverage restricts where draws
+  // on this picture land. 0/undefined = no mask. Plus its clip origin.
+  clipMask?: number;
+  clipXOrigin?: number;
+  clipYOrigin?: number;
   // CreateSolidFill stores a packed 0xAARRGGBB here. Used when the picture is
   // sourced as a solid color in Composite or FillRectangles.
   solidFill?: number;
@@ -113,7 +118,7 @@ export function handleRenderRequest(c: Ctx) {
     case 0:  return onQueryVersion(c);
     case 1:  return onQueryPictFormats(c);
     case 4:  return onCreatePicture(c);
-    case 5:  return; // ChangePicture — silently accept
+    case 5:  return onChangePicture(c);
     case 6:  return onSetPictureClipRectangles(c);
     case 7:  return onFreePicture(c);
     case 8:  return onComposite(c);
@@ -245,6 +250,42 @@ function onCreatePicture(c: Ctx) {
 function onFreePicture(c: Ctx) {
   const pid = reqView(c).getUint32(4, c.littleEndian);
   c.render.pictures.delete(pid);
+}
+
+// ChangePicture (op 5): update picture attributes. We act on the clip, which
+// can be set two ways that share one slot: SetPictureClipRectangles (a rect
+// list) OR ChangePicture with CPClipMask (a pixmap, or None to remove all
+// clipping). Crucially, CPClipMask = None must CLEAR any clip rectangles too —
+// toolkits (Cairo, as used by gnome-mahjongg/-mines) set a per-tile clip rect,
+// draw, then reset the clip with CPClipMask=None before the next tile. Ignoring
+// that reset left a stale rect that clipped every later draw away (blank
+// mahjongg tile faces). Other attributes are accepted and ignored. Values
+// follow the 32-bit value-mask in ascending bit order, one CARD32 each.
+function onChangePicture(c: Ctx) {
+  const v = reqView(c); const le = c.littleEndian;
+  const pid = v.getUint32(4, le);
+  const valueMask = v.getUint32(8, le);
+  const pic = c.render.pictures.get(pid);
+  if (!pic) return;
+  let p = 12;
+  const ATTR_CLIP_X_ORIGIN = 4, ATTR_CLIP_Y_ORIGIN = 5, ATTR_CLIP_MASK = 6;
+  for (let bit = 0; bit < 13; bit++) {
+    if (!(valueMask & (1 << bit))) continue;
+    if (p + 4 > c.bytes.byteLength) break;
+    const val = v.getUint32(p, le); p += 4;
+    if (bit === ATTR_CLIP_X_ORIGIN) pic.clipXOrigin = (val << 16) >> 16;        // INT16
+    else if (bit === ATTR_CLIP_Y_ORIGIN) pic.clipYOrigin = (val << 16) >> 16;   // INT16
+    else if (bit === ATTR_CLIP_MASK) {
+      if (val === 0) {
+        // None: remove ALL clipping (mask and any rectangles).
+        delete pic.clipMask;
+        delete pic.clipRects;
+        pic.clipXOrigin = 0; pic.clipYOrigin = 0;
+      } else {
+        pic.clipMask = val;
+      }
+    }
+  }
 }
 
 function onSetPictureClipRectangles(c: Ctx) {
