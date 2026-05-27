@@ -244,7 +244,7 @@ export function handleRequest(ctx: RequestContext) {
     case OP.GetSelectionOwner: return onGetSelectionOwner(ctx);
     case OP.GrabServer: case OP.UngrabServer: return;
     case OP.SendEvent: return onSendEvent(ctx);
-    case OP.ConvertSelection: return;
+    case OP.ConvertSelection: return onConvertSelection(ctx);
     case OP.SetSelectionOwner: return onSetSelectionOwner(ctx);
     case OP.GrabPointer: return onGrabPointer(ctx);
     case OP.UngrabPointer: return onUngrabPointer(ctx);
@@ -883,6 +883,49 @@ function onGetSelectionOwner(ctx: RequestContext) {
   ctx.send(makeReply(ctx, 0, (w) => { w.card32(owner); w.pad(20); }));
 }
 
+// ConvertSelection drives copy/paste. The requesting client asks for the
+// current selection (PRIMARY for middle-click, CLIPBOARD for Ctrl-V) converted
+// to a target type (e.g. UTF8_STRING) and stored in a property of its window.
+// The X server's job is only to route: forward a SelectionRequest to the
+// current owner, who then writes the data into the requestor's property
+// (ChangeProperty — works cross-client, properties live on the window) and
+// answers with a SelectionNotify of its own (via SendEvent). If there is no
+// owner, the server itself replies to the requestor with property=None.
+function onConvertSelection(ctx: RequestContext) {
+  const v = reqView(ctx); const le = ctx.littleEndian;
+  const requestor = v.getUint32(4, le);
+  const selection = v.getUint32(8, le);
+  const target = v.getUint32(12, le);
+  const property = v.getUint32(16, le);
+  const time = v.getUint32(20, le);
+
+  const ownerWid = selectionOwners.get(selection) ?? 0;
+  const ownerWin = ownerWid ? ctx.windows.get(ownerWid) : undefined;
+  if (!ownerWin) {
+    // No owner — tell the requestor the conversion failed (property = None).
+    const reqWin = ctx.windows.get(requestor);
+    emitEvent(ctx, reqWin?.owner ?? ctx.clientId, 31 /* SelectionNotify */, null, (w) => {
+      w.card32(time);
+      w.card32(requestor);
+      w.card32(selection);
+      w.card32(target);
+      w.card32(0 /* property = None */);
+      w.pad(8);
+    });
+    return;
+  }
+  // Ask the owner to convert: SelectionRequest to the owning client.
+  emitEvent(ctx, ownerWin.owner, 30 /* SelectionRequest */, null, (w) => {
+    w.card32(time);
+    w.card32(ownerWid);     // owner window
+    w.card32(requestor);
+    w.card32(selection);
+    w.card32(target);
+    w.card32(property);
+    w.pad(4);
+  });
+}
+
 function onQueryPointer(ctx: RequestContext) {
   const v = reqView(ctx); const le = ctx.littleEndian;
   const wid = v.getUint32(4, le);
@@ -939,7 +982,15 @@ function onSendEvent(ctx: RequestContext) {
   if (destWid < 4) return;
   const dest = ctx.windows.get(destWid);
   if (!dest) return;
-  if (dest.owner === ctx.clientId) return;
+  // The ICCCM selection handshake (SelectionRequest/Notify/Clear) routinely
+  // targets the sender's own window — same-app copy/paste, e.g. selecting text
+  // in a terminal and middle-click pasting it back. Those must be delivered.
+  // Every other same-client SendEvent stays suppressed: our deliver-back
+  // approximation can't tell whether the sender meant to receive its own event
+  // and doing so has crashed twm.
+  const evtType = (ctx.bytes[12] ?? 0) & 0x7f;
+  const isSelectionEvent = evtType === 29 || evtType === 30 || evtType === 31;
+  if (dest.owner === ctx.clientId && !isSelectionEvent) return;
   if (eventMask !== 0 && !(dest.eventMask & eventMask)) return;
 
   // Copy the 32-byte event and set the "synthetic" high bit on byte 0.
