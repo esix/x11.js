@@ -304,27 +304,44 @@ export class XServer {
     if (window === this.inputFocus) return;
     const prev = this.inputFocus;
     this.inputFocus = window;
-    // FocusOut on the window losing focus.
-    const prevWin = this.windows.get(prev);
-    if (prevWin && prev !== ROOT_WINDOW_ID) this.sendFocusEvent(prevWin, 10 /* FocusOut */);
-    // FocusIn on the window gaining focus.
-    const newWin = this.windows.get(window);
-    if (newWin && window !== ROOT_WINDOW_ID) this.sendFocusEvent(newWin, 9 /* FocusIn */);
+    // X generates focus events for the focus window AND its ancestors. This
+    // matters for GTK CSD apps that take focus on a small child window (a
+    // focus/IM proxy): GDK selects FocusChange on the TOPLEVEL, so unless the
+    // toplevel ancestor also gets a FocusIn it never registers as active.
+    // gnome-mines auto-pauses while inactive and its tile handlers early-return
+    // when paused, so without this the board ignores every click.
+    //   focus window itself  -> NotifyNonlinear (3)
+    //   ancestors up to root -> NotifyNonlinearVirtual (4)
+    if (prev !== ROOT_WINDOW_ID) this.sendFocusChain(prev, 10 /* FocusOut */);
+    if (window !== ROOT_WINDOW_ID) this.sendFocusChain(window, 9 /* FocusIn */);
   }
 
   getInputFocus(): number {
     return this.inputFocus || ROOT_WINDOW_ID;
   }
 
-  /** FocusIn (9) / FocusOut (10). Layout: detail, seq, event-window, mode,
-   *  pad. We use mode=Normal, detail=Nonlinear (a top-level focus change that
-   *  GDK counts toward window-active state). */
-  private sendFocusEvent(win: Window, type: 9 | 10) {
+  /** Send a focus event to `window` (detail Nonlinear) and to each ancestor up
+   *  to — but excluding — root (detail NonlinearVirtual). */
+  private sendFocusChain(window: number, type: 9 | 10) {
+    const win = this.windows.get(window);
+    if (!win) return;
+    this.sendFocusEvent(win, type, 3 /* NotifyNonlinear */);
+    let cur = this.windows.get(win.parent);
+    while (cur && cur.id !== ROOT_WINDOW_ID) {
+      this.sendFocusEvent(cur, type, 4 /* NotifyNonlinearVirtual */);
+      cur = this.windows.get(cur.parent);
+    }
+  }
+
+  /** FocusIn (9) / FocusOut (10). Only delivered to a client that selected
+   *  FocusChange on the window. Layout: detail, seq, event-window, mode, pad. */
+  private sendFocusEvent(win: Window, type: 9 | 10, detail: number) {
+    if (!(win.eventMask & EVENT_MASK.FocusChange)) return;
     const s = this.clients.get(win.owner);
     if (!s) return;
     const w = new Writer(32, s.littleEndian);
     w.card8(type);
-    w.card8(3);                        // detail: NotifyNonlinear
+    w.card8(detail);
     w.card16(s.sequence);
     w.card32(win.id);                  // event window
     w.card8(0);                        // mode: NotifyNormal
