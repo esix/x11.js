@@ -393,7 +393,26 @@ export class XServer {
     this.inputFocus = window;
     if (oldTop === newTop) return;     // focus stayed within one toplevel
     if (oldTop) this.sendFocusEvent(oldTop, 10 /* FocusOut */, 3 /* Nonlinear */);
-    if (newTop) this.sendFocusEvent(newTop, 9 /* FocusIn */, 3 /* Nonlinear */);
+    if (newTop) {
+      this.sendFocusEvent(newTop, 9 /* FocusIn */, 3 /* Nonlinear */);
+      // Raise the newly-focused toplevel to the front. This single "focused
+      // window is frontmost" rule gives click-to-raise, taskbar-activate, and
+      // new-window-on-top uniformly. metacity demotes-via-Below restacks are
+      // ignored for top-levels (see onConfigureWindow), and the panels live
+      // outside the app work area (they don't overlap), so raising an app
+      // never covers them.
+      this.bringToFront(newTop);
+    }
+  }
+
+  /** Raise a top-level window above all currently-mapped windows. */
+  private bringToFront(win: Window) {
+    let max = win.stackOrder;
+    for (const w of this.windows.values()) if (w.mapped && w.stackOrder > max) max = w.stackOrder;
+    if (win.stackOrder !== max) {
+      win.stackOrder = max + 1;
+      this.renderer.invalidate();
+    }
   }
 
   getInputFocus(): number {
