@@ -156,6 +156,8 @@ export interface RequestContext {
                          pointerMode: number) => void;
   removePassiveButtonGrab: (window: number, button: number, modifiers: number) => void;
   allowEvents: (mode: number) => void;
+  setInputFocus: (window: number) => void;
+  getInputFocus: () => number;
   pointerX: number;
   pointerY: number;
   buttonState: number;
@@ -260,7 +262,7 @@ export function handleRequest(ctx: RequestContext) {
     case OP.ListFontsWithInfo: return onListFonts(ctx); // simpler: same as ListFonts
     case OP.GetFontPath: return onGetFontPath(ctx);
     case OP.QueryPointer: return onQueryPointer(ctx);
-    case OP.SetInputFocus: return; // accept silently
+    case OP.SetInputFocus: return onSetInputFocus(ctx);
     case OP.GetInputFocus: return onGetInputFocus(ctx);
     case OP.QueryKeymap: return onQueryKeymap(ctx);
     case OP.CreatePixmap: return onCreatePixmap(ctx);
@@ -371,19 +373,19 @@ function applyWindowValueMask(
       case 1:  win.backgroundPixel = val; break;   // CWBackPixel
       case 9:  win.overrideRedirect = val !== 0; break; // CWOverrideRedirect
       case 11: {
-        // X11 spec says CWEventMask replaces the requesting client's mask
-        // on this window. Different clients can hold different masks on the
-        // same window — the WM selecting SubstructureNotify should NOT
-        // clear the owner's ButtonPress, for example. We don't track
-        // per-client masks, so as a compromise we preserve the bits that
-        // are routed to the window owner (input events) while letting the
-        // WM-related bits be overwritten by whoever sets them last.
-        //
-        // Without this preservation, marco/metacity's later
-        // ChangeWindowAttributes on mate-panel's panel window clobbers
-        // mate-panel's ButtonPress and Applications/Places/System clicks
-        // are dropped on the floor.
-        const INPUT_PRESERVE = (
+        // X11 keeps a SEPARATE event mask per (window, client). A full union
+        // would be most correct, but feeding the WM (metacity) the union of
+        // everyone's selections destabilizes it (panels get mis-strutted,
+        // some windows never map). So we keep a pragmatic compromise: a client
+        // overwrites the mask, but when a NON-owner does so we preserve the
+        // bits that are routed to the window owner — input events plus
+        // FocusChange. Preserving FocusChange matters because GTK apps select
+        // it on their toplevel to learn they're active; metacity later selects
+        // StructureNotify on the same window to manage it, and without this the
+        // app's FocusChange is lost and it never activates (gnome-mines then
+        // ignores all board clicks). Likewise preserving the input bits keeps a
+        // panel's ButtonPress alive across the WM's overwrite.
+        const OWNER_PRESERVE = (
           EVENT_MASK.ButtonPress | EVENT_MASK.ButtonRelease |
           EVENT_MASK.KeyPress | EVENT_MASK.KeyRelease |
           EVENT_MASK.PointerMotion | EVENT_MASK.PointerMotionHint |
@@ -391,13 +393,10 @@ function applyWindowValueMask(
           EVENT_MASK.Button1Motion | EVENT_MASK.Button2Motion |
           EVENT_MASK.Button3Motion | EVENT_MASK.Button4Motion |
           EVENT_MASK.Button5Motion |
-          EVENT_MASK.EnterWindow | EVENT_MASK.LeaveWindow
+          EVENT_MASK.EnterWindow | EVENT_MASK.LeaveWindow |
+          EVENT_MASK.FocusChange
         );
-        // Only the owner client of the window typically sets input bits,
-        // so only preserve old input bits when SOMEONE ELSE is doing the
-        // overwrite. That keeps a client that explicitly clears its own
-        // ButtonPress from getting it back.
-        const preserveOld = (requester !== win.owner) ? (win.eventMask & INPUT_PRESERVE) : 0;
+        const preserveOld = (requester !== win.owner) ? (win.eventMask & OWNER_PRESERVE) : 0;
         win.eventMask = val | preserveOld;
         // Record this client's exact selection so events that must reach a
         // non-owner selector (e.g. PropertyNotify to a GtkSocket watching a
@@ -902,8 +901,18 @@ function onQueryPointer(ctx: RequestContext) {
   }));
 }
 
+function onSetInputFocus(ctx: RequestContext) {
+  // byte 1 (requestData) = revert-to; bytes 4..7 = focus window
+  // (0=None, 1=PointerRoot); bytes 8..11 = time.
+  const focus = reqView(ctx).getUint32(4, ctx.littleEndian);
+  ctx.setInputFocus(focus);
+}
+
 function onGetInputFocus(ctx: RequestContext) {
-  ctx.send(makeReply(ctx, 0, (w) => { w.card32(ctx.rootWindowId); w.pad(20); }));
+  // Reply: revert-to (data byte) + focus window. Returning the real focus is
+  // what lets GDK confirm a FocusIn and mark the toplevel active.
+  const focus = ctx.getInputFocus();
+  ctx.send(makeReply(ctx, 1 /* revert-to: PointerRoot */, (w) => { w.card32(focus); w.pad(16); }));
 }
 
 function onQueryKeymap(ctx: RequestContext) {

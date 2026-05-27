@@ -132,5 +132,6 @@ export const EVENT_MASK = {
   StructureNotify: 0x00020000,
   SubstructureNotify: 0x00080000,
   SubstructureRedirect: 0x00100000,
+  FocusChange: 0x00200000,
   PropertyChange: 0x00400000,
 } as const;

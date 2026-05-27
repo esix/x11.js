@@ -35,6 +35,13 @@ export class XServer {
   private modifierState = 0;          // Shift/Lock/Control/Mod1 bits
   private windowUnderPointer = 0;     // 0 = root
   private activeGrab: PointerGrab | undefined = undefined;
+  // The window with the X input focus. GTK apps watch FocusIn/FocusOut to
+  // decide whether their toplevel is "active"; some (gnome-mines) ignore
+  // board input entirely until active. metacity sets focus via SetInputFocus,
+  // which used to be a no-op — so those apps never activated. We track focus
+  // here, answer GetInputFocus truthfully, and emit FocusIn/FocusOut.
+  private inputFocus = 0;             // 0 = None, 1 = root/PointerRoot
+
   // Passive button grabs: mate-panel installs these on its top-level window
   // for the Applications/Places/System buttons. Without honoring them, the
   // panel's eventMask doesn't include ButtonPress and clicks vanish.
@@ -288,6 +295,41 @@ export class XServer {
         this.deliverButtonToApp(frozen.replayHit, frozen.button, false, relState);
       }
     }
+  }
+
+  /** Set the X input focus. Sends FocusOut to the previously focused window
+   *  and FocusIn to the new one, so GTK toplevels learn they're active.
+   *  `window`: 0/None, 1/PointerRoot, or a window id. */
+  setInputFocus(window: number) {
+    if (window === this.inputFocus) return;
+    const prev = this.inputFocus;
+    this.inputFocus = window;
+    // FocusOut on the window losing focus.
+    const prevWin = this.windows.get(prev);
+    if (prevWin && prev !== ROOT_WINDOW_ID) this.sendFocusEvent(prevWin, 10 /* FocusOut */);
+    // FocusIn on the window gaining focus.
+    const newWin = this.windows.get(window);
+    if (newWin && window !== ROOT_WINDOW_ID) this.sendFocusEvent(newWin, 9 /* FocusIn */);
+  }
+
+  getInputFocus(): number {
+    return this.inputFocus || ROOT_WINDOW_ID;
+  }
+
+  /** FocusIn (9) / FocusOut (10). Layout: detail, seq, event-window, mode,
+   *  pad. We use mode=Normal, detail=Nonlinear (a top-level focus change that
+   *  GDK counts toward window-active state). */
+  private sendFocusEvent(win: Window, type: 9 | 10) {
+    const s = this.clients.get(win.owner);
+    if (!s) return;
+    const w = new Writer(32, s.littleEndian);
+    w.card8(type);
+    w.card8(3);                        // detail: NotifyNonlinear
+    w.card16(s.sequence);
+    w.card32(win.id);                  // event window
+    w.card8(0);                        // mode: NotifyNormal
+    w.pad(23);
+    this.onSend(win.owner, w.finish());
   }
 
   /** Walk hit→ancestors looking for a passive button grab whose (button,
@@ -571,6 +613,8 @@ export class XServer {
         removePassiveButtonGrab: (w, btn, mods) =>
           this.removePassiveButtonGrab(w, btn, mods),
         allowEvents: (mode) => this.allowEvents(mode),
+        setInputFocus: (window) => this.setInputFocus(window),
+        getInputFocus: () => this.getInputFocus(),
         pointerX: this.pointerX,
         pointerY: this.pointerY,
         buttonState: this.buttonState | this.modifierState,
