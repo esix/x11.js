@@ -41,6 +41,8 @@ export class XServer {
   // which used to be a no-op — so those apps never activated. We track focus
   // here, answer GetInputFocus truthfully, and emit FocusIn/FocusOut.
   private inputFocus = 0;             // 0 = None, 1 = root/PointerRoot
+  // Window holding the implicit pointer grab (a button is held). 0 = none.
+  private implicitGrabWindow = 0;
 
   // Passive button grabs: mate-panel installs these on its top-level window
   // for the Applications/Places/System buttons. Without honoring them, the
@@ -166,6 +168,14 @@ export class XServer {
       return;
     }
 
+    // During an implicit grab (button held), motion goes to the grab window.
+    if (this.implicitGrabWindow) {
+      const gw = this.windows.get(this.implicitGrabWindow);
+      if (gw && (gw.eventMask & motionMask)) this.emit(gw, 6 /* MotionNotify */, 0);
+      this.renderer.setPointer(rootX, rootY, this.effectiveCursor());
+      return;
+    }
+
     if (hit && (hit.eventMask & motionMask)) {
       this.emit(hit, 6 /* MotionNotify */, 0);
     }
@@ -220,6 +230,20 @@ export class XServer {
       return;
     }
 
+    // Implicit pointer grab: per X core semantics, a normal button press grabs
+    // the pointer to the receiving window until ALL buttons are released, so
+    // the release reaches the same window even if the pointer moved. Crucially
+    // it also survives the client calling XUngrabPointer — gnome-mines' tiles
+    // do exactly that on every press (event.get_seat().ungrab()), and without
+    // the implicit grab the release was never delivered and the cell never
+    // revealed.
+    if (this.implicitGrabWindow) {
+      const gw = this.windows.get(this.implicitGrabWindow);
+      if (gw && (gw.eventMask & eventMask)) this.emit(gw, pressed ? 4 : 5, button, gw.owner, stateBefore);
+      if (!pressed && (this.buttonState & 0x1f00) === 0) this.implicitGrabWindow = 0;
+      return;
+    }
+
     const hit = this.windowAt(this.pointerX, this.pointerY);
     if (!hit) return;
 
@@ -257,23 +281,28 @@ export class XServer {
       }
     }
 
-    this.deliverButtonToApp(hit, button, pressed, stateBefore);
+    const target = this.deliverButtonToApp(hit, button, pressed, stateBefore);
+    // Start the implicit grab on the window that received the press.
+    if (pressed && target) this.implicitGrabWindow = target.id;
+    else if (!pressed && (this.buttonState & 0x1f00) === 0) this.implicitGrabWindow = 0;
   }
 
   /** Deliver a button event by walking hit→ancestors to the first window that
    *  selected it (X11 propagation), ignoring passive grabs. Used both for
-   *  normal delivery and for replaying a press after AllowEvents(ReplayPointer). */
-  private deliverButtonToApp(hit: Window, button: number, pressed: boolean, state: number) {
+   *  normal delivery and for replaying a press after AllowEvents(ReplayPointer).
+   *  Returns the window that received the event (the implicit-grab window). */
+  private deliverButtonToApp(hit: Window, button: number, pressed: boolean, state: number): Window | undefined {
     const eventMask = pressed ? EVENT_MASK.ButtonPress : EVENT_MASK.ButtonRelease;
     let cur: Window | undefined = hit;
     while (cur) {
       if (cur.eventMask & eventMask) {
         this.emit(cur, pressed ? 4 : 5, button, cur.owner, state);
-        return;
+        return cur;
       }
       if (cur.id === ROOT_WINDOW_ID) break;
       cur = this.windows.get(cur.parent);
     }
+    return undefined;
   }
 
   /**
@@ -297,40 +326,40 @@ export class XServer {
     }
   }
 
-  /** Set the X input focus. Sends FocusOut to the previously focused window
-   *  and FocusIn to the new one, so GTK toplevels learn they're active.
+  /** Set the X input focus. What GTK actually cares about is whether focus is
+   *  inside a given TOPLEVEL (it derives window-active state from FocusIn/Out
+   *  on the toplevel). So we track focus at toplevel granularity: emit FocusOut
+   *  on the old toplevel and FocusIn on the new one ONLY when the toplevel
+   *  actually changes.
+   *
+   *  Doing this per-window (with the full ancestor chain) caused focus to
+   *  FLAP: GTK CSD apps take focus on a child input/proxy window right after
+   *  mapping, and sending FocusOut(toplevel)+FocusIn(toplevel) for that
+   *  intra-toplevel move made GTK see the toplevel lose-then-regain focus.
+   *  gnome-mines auto-pauses on each focus-out and won't auto-resume, so the
+   *  board ended up paused and rejected every click.
    *  `window`: 0/None, 1/PointerRoot, or a window id. */
   setInputFocus(window: number) {
     if (window === this.inputFocus) return;
-    const prev = this.inputFocus;
+    const oldTop = this.toplevelOf(this.inputFocus);
+    const newTop = this.toplevelOf(window);
     this.inputFocus = window;
-    // X generates focus events for the focus window AND its ancestors. This
-    // matters for GTK CSD apps that take focus on a small child window (a
-    // focus/IM proxy): GDK selects FocusChange on the TOPLEVEL, so unless the
-    // toplevel ancestor also gets a FocusIn it never registers as active.
-    // gnome-mines auto-pauses while inactive and its tile handlers early-return
-    // when paused, so without this the board ignores every click.
-    //   focus window itself  -> NotifyNonlinear (3)
-    //   ancestors up to root -> NotifyNonlinearVirtual (4)
-    if (prev !== ROOT_WINDOW_ID) this.sendFocusChain(prev, 10 /* FocusOut */);
-    if (window !== ROOT_WINDOW_ID) this.sendFocusChain(window, 9 /* FocusIn */);
+    if (oldTop === newTop) return;     // focus stayed within one toplevel
+    if (oldTop) this.sendFocusEvent(oldTop, 10 /* FocusOut */, 3 /* Nonlinear */);
+    if (newTop) this.sendFocusEvent(newTop, 9 /* FocusIn */, 3 /* Nonlinear */);
   }
 
   getInputFocus(): number {
     return this.inputFocus || ROOT_WINDOW_ID;
   }
 
-  /** Send a focus event to `window` (detail Nonlinear) and to each ancestor up
-   *  to — but excluding — root (detail NonlinearVirtual). */
-  private sendFocusChain(window: number, type: 9 | 10) {
-    const win = this.windows.get(window);
-    if (!win) return;
-    this.sendFocusEvent(win, type, 3 /* NotifyNonlinear */);
-    let cur = this.windows.get(win.parent);
-    while (cur && cur.id !== ROOT_WINDOW_ID) {
-      this.sendFocusEvent(cur, type, 4 /* NotifyNonlinearVirtual */);
-      cur = this.windows.get(cur.parent);
-    }
+  /** The toplevel (direct child of root) containing `wid`, or undefined for
+   *  None/root. */
+  private toplevelOf(wid: number): Window | undefined {
+    let cur = this.windows.get(wid);
+    if (!cur || cur.id === ROOT_WINDOW_ID) return undefined;
+    while (cur && cur.parent !== ROOT_WINDOW_ID) cur = this.windows.get(cur.parent);
+    return cur;
   }
 
   /** FocusIn (9) / FocusOut (10). Only delivered to a client that selected
@@ -432,6 +461,31 @@ export class XServer {
     return this.activeGrab;
   }
 
+  /** XUngrabPointer from `clientId`. Releases that client's active grab AND the
+   *  implicit button grab, then emits an Ungrab crossing (EnterNotify
+   *  mode=Ungrab) to the window now under the pointer. GDK relies on that
+   *  crossing to re-sync its pointer state after a grab ends; without it, a
+   *  GtkButton that calls gdk_seat_ungrab in its press handler (gnome-mines'
+   *  tiles) never dispatches the matching button-release, so cells don't
+   *  reveal. */
+  ungrabPointer(clientId: number) {
+    let released = false;
+    if (this.activeGrab && this.activeGrab.client === clientId) {
+      this.activeGrab = undefined;
+      released = true;
+    }
+    if (this.implicitGrabWindow) {
+      const gw = this.windows.get(this.implicitGrabWindow);
+      if (gw && gw.owner === clientId) { this.implicitGrabWindow = 0; released = true; }
+    }
+    if (!released) return;
+    const now = this.windowAt(this.pointerX, this.pointerY);
+    this.windowUnderPointer = now?.id ?? 0;
+    if (now && (now.eventMask & EVENT_MASK.EnterWindow)) {
+      this.emitCrossing(now, 7 /* EnterNotify */, 2 /* NotifyUngrab */);
+    }
+  }
+
   key(keycode: number, pressed: boolean) {
     // Update modifier-state bitmask if this keycode is a modifier.
     for (let i = 0; i < MODIFIER_MAP.length; i++) {
@@ -460,28 +514,24 @@ export class XServer {
     if ((now?.id ?? 0) === this.windowUnderPointer) return;
     const prev = this.windows.get(this.windowUnderPointer);
     if (prev && (prev.eventMask & EVENT_MASK.LeaveWindow)) {
-      this.emitCrossing(prev, 8 /* LeaveNotify */);
+      this.emitCrossing(prev, 8 /* LeaveNotify */, 0 /* Normal */);
     }
     if (now && (now.eventMask & EVENT_MASK.EnterWindow)) {
-      this.emitCrossing(now, 7 /* EnterNotify */);
+      this.emitCrossing(now, 7 /* EnterNotify */, 0 /* Normal */);
     }
   }
 
   /** Crossing-event (Enter/Leave) emit. These events have `mode` at byte 30
    *  and `focus|same_screen` at byte 31 — different from button/motion which
    *  put `same_screen` at byte 30. Using {@link emit} for crossings made GTK
-   *  read every Enter as Mode=Grab and stopped menu hover from updating. */
-  private emitCrossing(win: Window, type: 7 | 8) {
+   *  read every Enter as Mode=Grab and stopped menu hover from updating.
+   *  mode: 0=Normal, 1=Grab, 2=Ungrab. (GDK aborts on 3=WhileGrabbed.) */
+  private emitCrossing(win: Window, type: 7 | 8, mode: number) {
     const s = this.clients.get(win.owner);
     if (!s) return;
     const sp = this.screenPosOf(win.id);
     const ex = this.pointerX - sp.x;
     const ey = this.pointerY - sp.y;
-    // mode field: 0=Normal, 1=Grab (on grab activate), 2=Ungrab (on grab end).
-    // X has a 3=WhileGrabbed value too but GDK's crossing-mode translator
-    // aborts on it ("code should not be reached") — so we just send Normal
-    // for owner-events crossings inside an in-progress grab.
-    const mode = 0;
     const w = new Writer(32, s.littleEndian);
     w.card8(type);
     w.card8(0);                        // detail: Ancestor (good enough for siblings)
@@ -632,6 +682,7 @@ export class XServer {
         allowEvents: (mode) => this.allowEvents(mode),
         setInputFocus: (window) => this.setInputFocus(window),
         getInputFocus: () => this.getInputFocus(),
+        ungrabPointer: (cid) => this.ungrabPointer(cid),
         pointerX: this.pointerX,
         pointerY: this.pointerY,
         buttonState: this.buttonState | this.modifierState,

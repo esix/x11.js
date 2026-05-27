@@ -158,6 +158,7 @@ export interface RequestContext {
   allowEvents: (mode: number) => void;
   setInputFocus: (window: number) => void;
   getInputFocus: () => number;
+  ungrabPointer: (clientId: number) => void;
   pointerX: number;
   pointerY: number;
   buttonState: number;
@@ -973,9 +974,9 @@ function onGrabPointer(ctx: RequestContext) {
 }
 
 function onUngrabPointer(ctx: RequestContext) {
-  const grab = ctx.getActiveGrab();
-  if (!grab || grab.client !== ctx.clientId) return;
-  ctx.setActiveGrab(undefined);
+  // Releases the client's active grab + implicit button grab and emits the
+  // Ungrab crossing so GDK re-syncs (see XServer.ungrabPointer).
+  ctx.ungrabPointer(ctx.clientId);
 }
 
 function onGrabButton(ctx: RequestContext) {
