@@ -159,6 +159,8 @@ export interface RequestContext {
   setInputFocus: (window: number) => void;
   getInputFocus: () => number;
   ungrabPointer: (clientId: number) => void;
+  grabKeyboard: (window: number, ownerEvents: boolean) => void;
+  ungrabKeyboard: (clientId: number) => void;
   pointerX: number;
   pointerY: number;
   buttonState: number;
@@ -249,7 +251,7 @@ export function handleRequest(ctx: RequestContext) {
     case OP.GrabButton: return onGrabButton(ctx);
     case OP.UngrabButton: return onUngrabButton(ctx);
     case OP.GrabKeyboard: return onGrabKeyboard(ctx);
-    case OP.UngrabKeyboard: return;
+    case OP.UngrabKeyboard: return ctx.ungrabKeyboard(ctx.clientId);
     case OP.GrabKey: return; // passive key grab
     case OP.UngrabKey: return;
     case OP.AllowEvents: return onAllowEvents(ctx);
@@ -1019,7 +1021,13 @@ function onAllowEvents(ctx: RequestContext) {
 }
 
 function onGrabKeyboard(ctx: RequestContext) {
-  // We don't model keyboard grabs separately, but the request has a reply.
+  // GrabKeyboard: owner_events at byte 1, grab_window at bytes 4..7. We track
+  // the grab so key events route to the grab window (GTK menus rely on this
+  // for keyboard navigation). Reply status 0 = Success.
+  const v = reqView(ctx);
+  const ownerEvents = v.getUint8(1) !== 0;
+  const grabWindow = v.getUint32(4, ctx.littleEndian);
+  ctx.grabKeyboard(grabWindow, ownerEvents);
   ctx.send(makeReply(ctx, 0, (w) => { w.pad(24); }));
 }
 

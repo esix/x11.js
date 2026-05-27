@@ -43,6 +43,11 @@ export class XServer {
   private inputFocus = 0;             // 0 = None, 1 = root/PointerRoot
   // Window holding the implicit pointer grab (a button is held). 0 = none.
   private implicitGrabWindow = 0;
+  // Active keyboard grab (XGrabKeyboard). GTK menus grab the keyboard on
+  // popup so arrow-key navigation and type-ahead reach the menu rather than
+  // the toplevel underneath; we route all key events to the grab window while
+  // it's set. undefined = no grab.
+  private keyboardGrab: { window: number; client: number; ownerEvents: boolean } | undefined = undefined;
 
   // Passive button grabs: mate-panel installs these on its top-level window
   // for the Applications/Places/System buttons. Without honoring them, the
@@ -104,6 +109,9 @@ export class XServer {
     const s = this.clients.get(clientId);
     if (!s) return;
     this.clients.delete(clientId);
+    if (this.keyboardGrab && this.keyboardGrab.client === clientId) {
+      this.keyboardGrab = undefined;
+    }
 
     // Collect windows to destroy first so SubstructureNotify subscribers
     // (window managers) can be notified BEFORE the windows disappear from
@@ -503,11 +511,11 @@ export class XServer {
         else this.modifierState &= ~bit;
       }
     }
-    // Key events propagate up the window tree: if the leaf doesn't have
-    // KeyPress/Release selected, the parent gets it, and so on. Emacs only
-    // selects key events on its top-level frame, not the inner buffer window.
+    // Determine the source window per X11 keyboard delivery, then propagate up
+    // to the first ancestor that selected the event. (Emacs, for instance,
+    // selects keys on its top-level frame, not the inner buffer window.)
     const mask = pressed ? EVENT_MASK.KeyPress : EVENT_MASK.KeyRelease;
-    let cur: Window | undefined = this.windows.get(this.windowUnderPointer);
+    let cur = this.keyEventSource();
     while (cur) {
       if (cur.eventMask & mask) {
         this.emit(cur, pressed ? 2 : 3, keycode & 0xff);
@@ -515,6 +523,59 @@ export class XServer {
       }
       if (cur.id === ROOT_WINDOW_ID) break;
       cur = this.windows.get(cur.parent);
+    }
+  }
+
+  /** The window a key event originates from, before upward propagation.
+   *
+   *  X11 sends key events to the INPUT FOCUS window, not the window under the
+   *  pointer. We used to route every key by `windowUnderPointer` — effectively
+   *  focus-follows-mouse for the keyboard — so typing while the pointer wasn't
+   *  hovering the target (the normal case: you click a window to focus it, then
+   *  type with the mouse at rest elsewhere) went nowhere. GTK toplevels take
+   *  the X focus on a dedicated 1×1 focus window that selects KeyPress, so
+   *  delivering to the focus window lands keys in the right app. */
+  private keyEventSource(): Window | undefined {
+    // An active keyboard grab (e.g. an open GTK menu) takes all key events,
+    // as long as its window is still mapped — menus grab on popup and ungrab
+    // on popdown. Drop a stale grab if its window vanished.
+    if (this.keyboardGrab) {
+      const gw = this.windows.get(this.keyboardGrab.window);
+      if (gw && gw.mapped) return gw;
+      this.keyboardGrab = undefined;
+    }
+    const focus = this.inputFocus;
+    // None (0) / PointerRoot (1): keyboard follows the pointer.
+    if (focus <= 1) return this.windows.get(this.windowUnderPointer);
+    const focusWin = this.windows.get(focus);
+    if (!focusWin) return this.windows.get(this.windowUnderPointer);
+    // If the pointer is inside the focus window or one of its inferiors, the
+    // event originates at the pointer window; otherwise at the focus window.
+    const pw = this.windows.get(this.windowUnderPointer);
+    if (pw && this.isInferiorOrEqual(pw, focusWin.id)) return pw;
+    return focusWin;
+  }
+
+  /** True if `w` is `ancestorId` or a descendant of it. */
+  private isInferiorOrEqual(w: Window, ancestorId: number): boolean {
+    let cur: Window | undefined = w;
+    while (cur) {
+      if (cur.id === ancestorId) return true;
+      if (cur.id === ROOT_WINDOW_ID) return false;
+      cur = this.windows.get(cur.parent);
+    }
+    return false;
+  }
+
+  /** XGrabKeyboard from `client` on `window`. */
+  grabKeyboard(window: number, client: number, ownerEvents: boolean) {
+    this.keyboardGrab = { window, client, ownerEvents };
+  }
+
+  /** XUngrabKeyboard — only the grabbing client may release its own grab. */
+  ungrabKeyboard(client: number) {
+    if (this.keyboardGrab && this.keyboardGrab.client === client) {
+      this.keyboardGrab = undefined;
     }
   }
 
@@ -691,6 +752,8 @@ export class XServer {
         setInputFocus: (window) => this.setInputFocus(window),
         getInputFocus: () => this.getInputFocus(),
         ungrabPointer: (cid) => this.ungrabPointer(cid),
+        grabKeyboard: (window, oe) => this.grabKeyboard(window, clientId, oe),
+        ungrabKeyboard: (cid) => this.ungrabKeyboard(cid),
         pointerX: this.pointerX,
         pointerY: this.pointerY,
         buttonState: this.buttonState | this.modifierState,
