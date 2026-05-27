@@ -43,6 +43,17 @@ export class XServer {
   private inputFocus = 0;             // 0 = None, 1 = root/PointerRoot
   // Window holding the implicit pointer grab (a button is held). 0 = none.
   private implicitGrabWindow = 0;
+  // When a client calls XUngrabPointer mid-press (button still held), the
+  // implicit grab persists so the release still reaches it. GtkButton (e.g.
+  // gnome-mines tiles) additionally needs an Ungrab crossing to re-sync GDK
+  // before that release, or it never dispatches button-release-event. But the
+  // SAME crossing, if sent mid-drag, cancels GtkGestureDrag (VTE text
+  // selection). So we DEFER it: arm it on ungrab, fire it just before the
+  // release ONLY if the pointer didn't move past a small threshold (a click,
+  // not a drag). `armed` + the anchor where the ungrab happened.
+  private ungrabCrossingArmed = false;
+  private ungrabAnchorX = 0;
+  private ungrabAnchorY = 0;
   // Active keyboard grab (XGrabKeyboard). GTK menus grab the keyboard on
   // popup so arrow-key navigation and type-ahead reach the menu rather than
   // the toplevel underneath; we route all key events to the grab window while
@@ -155,6 +166,13 @@ export class XServer {
 
   setPointer(rootX: number, rootY: number) {
     if (rootX === this.pointerX && rootY === this.pointerY) return;
+    // Moving more than a few pixels after an XUngrabPointer means this is a
+    // drag, not a click — disarm the deferred Ungrab crossing so it doesn't
+    // cancel the drag gesture (VTE text selection).
+    if (this.ungrabCrossingArmed) {
+      const dx = rootX - this.ungrabAnchorX, dy = rootY - this.ungrabAnchorY;
+      if (dx * dx + dy * dy > 16) this.ungrabCrossingArmed = false;  // >4px
+    }
     this.pointerX = rootX;
     this.pointerY = rootY;
 
@@ -208,6 +226,8 @@ export class XServer {
 
   pointerButton(button: number, pressed: boolean) {
     if (button < 1 || button > 5) return;
+    // A fresh press starts a new interaction; drop any stale armed crossing.
+    if (pressed) this.ungrabCrossingArmed = false;
     const bit = 1 << (7 + button);     // Button1Mask = 0x100, etc.
 
     // Per X spec, the `state` field of ButtonPress/ButtonRelease is the
@@ -247,6 +267,17 @@ export class XServer {
     // revealed.
     if (this.implicitGrabWindow) {
       const gw = this.windows.get(this.implicitGrabWindow);
+      // A click that called XUngrabPointer mid-press needs an Ungrab crossing
+      // to re-sync GDK BEFORE the release, or GtkButton (mines tiles) won't
+      // dispatch it. A drag cleared this in setPointer, so the crossing never
+      // fires mid-drag where it would cancel a selection gesture.
+      if (!pressed && this.ungrabCrossingArmed) {
+        this.ungrabCrossingArmed = false;
+        const now = this.windowAt(this.pointerX, this.pointerY);
+        if (now && (now.eventMask & EVENT_MASK.EnterWindow)) {
+          this.emitCrossing(now, 7 /* EnterNotify */, 2 /* NotifyUngrab */);
+        }
+      }
       if (gw && (gw.eventMask & eventMask)) this.emit(gw, pressed ? 4 : 5, button, gw.owner, stateBefore);
       if (!pressed && (this.buttonState & 0x1f00) === 0) this.implicitGrabWindow = 0;
       return;
@@ -477,24 +508,41 @@ export class XServer {
     return this.activeGrab;
   }
 
-  /** XUngrabPointer from `clientId`. Releases that client's active grab AND the
-   *  implicit button grab, then emits an Ungrab crossing (EnterNotify
-   *  mode=Ungrab) to the window now under the pointer. GDK relies on that
-   *  crossing to re-sync its pointer state after a grab ends; without it, a
-   *  GtkButton that calls gdk_seat_ungrab in its press handler (gnome-mines'
-   *  tiles) never dispatches the matching button-release, so cells don't
-   *  reveal. */
+  /** XUngrabPointer from `clientId`. Per X11 this releases ONLY the client's
+   *  ACTIVE grab (from XGrabPointer). The implicit grab created by a held
+   *  button persists until every button is released, so we must NOT clear it
+   *  here — and the pointer is therefore still grabbed, so NO crossing is
+   *  generated while a button is down. A crossing (EnterNotify mode=Ungrab) is
+   *  emitted only when the pointer becomes truly free, so GDK re-syncs.
+   *
+   *  Two superficially similar cases need exactly this split:
+   *   - gnome-mines tiles / GtkButton ungrab DURING a press (button still
+   *     held): the implicit grab must survive so the matching release still
+   *     reaches the widget and the click/reveal completes.
+   *   - VTE text selection: ungrab during a button-1 drag. Emitting a crossing
+   *     mid-drag (which we used to do) cancels GtkGestureDrag, so no selection
+   *     ever forms and PRIMARY is never claimed — breaking copy/paste. */
   ungrabPointer(clientId: number) {
-    let released = false;
-    if (this.activeGrab && this.activeGrab.client === clientId) {
-      this.activeGrab = undefined;
-      released = true;
+    const hadActiveGrab = !!this.activeGrab && this.activeGrab.client === clientId;
+    if (hadActiveGrab) this.activeGrab = undefined;
+    // While a button is held the implicit grab keeps the pointer grabbed, so it
+    // is NOT actually freed: emit no crossing now. Instead arm a deferred one
+    // that fires on the matching release iff the pointer stayed put (a click) —
+    // GtkButton (mines tiles) needs it to dispatch the release. A drag clears
+    // it in setPointer so it never cancels a selection gesture. Note GtkButton
+    // ungrabs WITHOUT an active X grab (it leans on the implicit grab), so we
+    // arm whenever an implicit grab exists, not only when an active grab was
+    // released.
+    if ((this.buttonState & 0x1f00) !== 0) {
+      if (this.implicitGrabWindow) {
+        this.ungrabCrossingArmed = true;
+        this.ungrabAnchorX = this.pointerX;
+        this.ungrabAnchorY = this.pointerY;
+      }
+      return;
     }
-    if (this.implicitGrabWindow) {
-      const gw = this.windows.get(this.implicitGrabWindow);
-      if (gw && gw.owner === clientId) { this.implicitGrabWindow = 0; released = true; }
-    }
-    if (!released) return;
+    // No button held: only an active-grab release actually frees the pointer.
+    if (!hadActiveGrab) return;
     const now = this.windowAt(this.pointerX, this.pointerY);
     this.windowUnderPointer = now?.id ?? 0;
     if (now && (now.eventMask & EVENT_MASK.EnterWindow)) {
