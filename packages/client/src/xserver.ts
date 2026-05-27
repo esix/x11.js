@@ -318,10 +318,18 @@ export class XServer {
     if (!frozen) return;
     this.frozenSyncGrab = undefined;
     if (mode === 2 /* ReplayPointer */) {
-      this.deliverButtonToApp(frozen.replayHit, frozen.button, true, frozen.stateBefore);
+      // Replay the press to the app AND establish the implicit pointer grab on
+      // the receiving window, exactly as a normal (un-grabbed) press would.
+      // Without this, a window whose press handler calls gdk_seat_ungrab
+      // (gnome-mines' tiles) found no implicit grab to release, so
+      // ungrabPointer emitted no Ungrab crossing, GDK never re-synced, and the
+      // matching button-release was never dispatched — the cell never revealed.
+      const target = this.deliverButtonToApp(frozen.replayHit, frozen.button, true, frozen.stateBefore);
+      if (target) this.implicitGrabWindow = target.id;
       if (frozen.releaseQueued) {
         const relState = frozen.stateBefore | (1 << (7 + frozen.button));
         this.deliverButtonToApp(frozen.replayHit, frozen.button, false, relState);
+        if ((this.buttonState & 0x1f00) === 0) this.implicitGrabWindow = 0;
       }
     }
   }
