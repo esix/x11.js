@@ -2225,7 +2225,12 @@ function onQueryExtension(ctx: RequestContext) {
     major = RANDR_MAJOR_OPCODE;
     firstEvent = RANDR_FIRST_EVENT;
     firstError = RANDR_FIRST_ERROR;
-  } else if (name === 'MIT-SHM' && (globalThis as any).__enable_shm !== false) {
+  } else if (name === 'MIT-SHM' && (globalThis as any).__enable_shm === true) {
+    // Advertise MIT-SHM only on explicit opt-in. We can't share memory with the
+    // docker-side client, so ShmAttach/ShmPutImage do nothing — and GTK/Cairo,
+    // if it sees the extension, uploads images (icons!) via ShmPutImage which we
+    // silently drop, leaving every icon blank. Keeping the extension hidden
+    // makes clients fall back to wire PutImage, which we render.
     present = 1;
     major = MITSHM_MAJOR_OPCODE;
     firstEvent = MITSHM_FIRST_EVENT;
@@ -2246,7 +2251,7 @@ function onListExtensions(ctx: RequestContext) {
   const names = ['RENDER', 'XInputExtension', 'SHAPE'];
   if ((globalThis as any).__enable_xkb === true) names.push('XKEYBOARD');
   if ((globalThis as any).__enable_randr !== false) names.push('RANDR');
-  if ((globalThis as any).__enable_shm !== false) names.push('MIT-SHM');
+  if ((globalThis as any).__enable_shm === true) names.push('MIT-SHM');
   // Reply: dataByte = numNames, then 24 bytes header, then length-prefixed names
   let bodyLen = 0;
   for (const n of names) bodyLen += 1 + n.length;
