@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         dbus dbus-x11 \
         gnome-panel gnome-menus \
         gnome-mahjongg gnome-mines gnome-tetravex \
-        mate-panel mate-terminal \
+        mate-panel mate-terminal caja \
         mate-settings-daemon-common mate-control-center-common \
         at-spi2-core \
         libglib2.0-bin \
