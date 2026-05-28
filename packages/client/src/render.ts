@@ -48,6 +48,11 @@ export interface Picture {
   clipMask?: number;
   clipXOrigin?: number;
   clipYOrigin?: number;
+  // SetPictureTransform: source-sampling transform. We support the scale +
+  // translate case (the common one for scaled icons/images); rotation/skew/
+  // projective transforms are dropped (treated as identity). src coord for a
+  // destination offset is sx*srcX+tx, sy*srcY+ty.
+  xform?: { sx: number; sy: number; tx: number; ty: number };
   // CreateSolidFill stores a packed 0xAARRGGBB here. Used when the picture is
   // sourced as a solid color in Composite or FillRectangles.
   solidFill?: number;
@@ -133,7 +138,7 @@ export function handleRenderRequest(c: Ctx) {
     case 25: return onCompositeGlyphs(c, 4);
     case 26: return onFillRectangles(c);
     case 27: return; // CreateCursor — RENDER-based color cursor; accept silently
-    case 28: return; // SetPictureTransform — identity by default, ignore
+    case 28: return onSetPictureTransform(c);
     case 31: return; // CreateAnimCursor — accept silently
     case 29: return; // QueryFilters — would need a reply; many callers tolerate ignored
     case 30: return; // SetPictureFilter — we always use canvas bilinear/nearest
@@ -261,6 +266,30 @@ function onFreePicture(c: Ctx) {
 // that reset left a stale rect that clipped every later draw away (blank
 // mahjongg tile faces). Other attributes are accepted and ignored. Values
 // follow the 32-bit value-mask in ascending bit order, one CARD32 each.
+// SetPictureTransform (op 28): a 3x3 FIXED (16.16) matrix mapping destination
+// coords to source coords. GTK/Cairo scales icons and images by setting a
+// scale transform on the source picture, then compositing. We honor the
+// scale+translate part (drawImage can express that); rotation/skew/projective
+// matrices are dropped to identity (no worse than before — they were ignored
+// entirely). Without this, scaled-icon composites read the source 1:1 and the
+// icon never appears.
+function onSetPictureTransform(c: Ctx) {
+  const v = reqView(c); const le = c.littleEndian;
+  const pid = v.getUint32(4, le);
+  const pic = c.render.pictures.get(pid);
+  if (!pic) return;
+  const m = (off: number) => v.getInt32(off, le) / 65536;
+  const m00 = m(8),  m01 = m(12), m02 = m(16);
+  const m10 = m(20), m11 = m(24), m12 = m(28);
+  const m20 = m(32), m21 = m(36), m22 = m(40);
+  // Pure scale+translate only: off-diagonal and projective terms must be zero
+  // and the homogeneous term 1. Anything else (or identity) → no transform.
+  const identity = m00 === 1 && m11 === 1 && m02 === 0 && m12 === 0;
+  const supported = m01 === 0 && m10 === 0 && m20 === 0 && m21 === 0 && m22 === 1 && m00 !== 0 && m11 !== 0;
+  if (identity || !supported) { delete pic.xform; return; }
+  pic.xform = { sx: m00, sy: m11, tx: m02, ty: m12 };
+}
+
 function onChangePicture(c: Ctx) {
   const v = reqView(c); const le = c.littleEndian;
   const pid = v.getUint32(4, le);
@@ -352,6 +381,16 @@ function onComposite(c: Ctx) {
   } else if (src) {
     const srcDr = c.getDrawable(src.drawable);
     if (srcDr) {
+      // Source-sampling region. With a scale+translate transform on the source
+      // (GTK/Cairo uses this to scale icons/images), the dst w×h reads a
+      // (sx*w)×(sy*h) region of the source at the transformed origin —
+      // drawImage then scales it back into the dst rect. Without honoring this
+      // the icon read the wrong (often out-of-bounds → blank) source region.
+      const xf = src.xform;
+      const sx = xf ? xf.sx * srcX + xf.tx : srcX;
+      const sy = xf ? xf.sy * srcY + xf.ty : srcY;
+      const sw = xf ? xf.sx * w : w;
+      const sh = xf ? xf.sy * h : h;
       // Canvas drawImage with overlapping src/dst on the same canvas is
       // undefined behavior — pixels often smear. Emacs uses this for its
       // line-scroll path (RenderComposite copying a region upward over itself).
@@ -359,10 +398,10 @@ function onComposite(c: Ctx) {
       if (srcDr === dstDr) {
         const tmp = new OffscreenCanvas(w, h);
         const tctx = tmp.getContext('2d')!;
-        tctx.drawImage(srcDr.buffer, srcX, srcY, w, h, 0, 0, w, h);
+        tctx.drawImage(srcDr.buffer, sx, sy, sw, sh, 0, 0, w, h);
         dctx.drawImage(tmp, 0, 0, w, h, dstX, dstY, w, h);
       } else {
-        dctx.drawImage(srcDr.buffer, srcX, srcY, w, h, dstX, dstY, w, h);
+        dctx.drawImage(srcDr.buffer, sx, sy, sw, sh, dstX, dstY, w, h);
       }
     }
   }
