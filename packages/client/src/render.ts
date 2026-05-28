@@ -56,6 +56,12 @@ export interface Picture {
   // CreateSolidFill stores a packed 0xAARRGGBB here. Used when the picture is
   // sourced as a solid color in Composite or FillRectangles.
   solidFill?: number;
+  // The drawable (canvas) resolved at creation time. X allows freeing a pixmap
+  // once a Picture references it — the Picture keeps the pixels alive. We don't
+  // refcount pixmaps, so we hold the canvas object here; it survives FreePixmap
+  // (GC'd with the Picture). Needed for the cursor pattern: CreatePixmap →
+  // PutImage → CreatePicture → FreePixmap → RenderCreateCursor.
+  drawableRef?: Drawable;
 }
 
 export interface Glyph {
@@ -249,7 +255,10 @@ function onCreatePicture(c: Ctx) {
   const drawable = v.getUint32(8, le);
   const format = v.getUint32(12, le);
   // bytes 16..19 = value-mask; 20+ = values (we ignore all attrs for now)
-  c.render.pictures.set(pid, { id: pid, drawable, format, owner: c.clientId });
+  const pic: Picture = { id: pid, drawable, format, owner: c.clientId };
+  const ref = c.getDrawable(drawable);
+  if (ref) pic.drawableRef = ref;
+  c.render.pictures.set(pid, pic);
 }
 
 function onFreePicture(c: Ctx) {

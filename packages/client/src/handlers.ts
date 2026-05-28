@@ -347,6 +347,12 @@ export function handleRequest(ctx: RequestContext) {
 }
 
 function dispatchRender(ctx: RequestContext) {
+  // RENDER CreateCursor (minor 27): modern GTK/Xcursor builds themed ARGB
+  // cursors (I-beam over text, hand over links, resize arrows on borders) via
+  // RENDER, not the core CreateCursor/CreateGlyphCursor path. The core RENDER
+  // handler can't reach the cursors map, so we build the cursor here from the
+  // source picture's pixmap. Without this every cursor stays the default arrow.
+  if ((ctx.bytes[1] ?? 0) === 27) { onRenderCreateCursor(ctx); return; }
   handleRenderRequest({
     bytes: ctx.bytes,
     littleEndian: ctx.littleEndian,
@@ -357,6 +363,25 @@ function dispatchRender(ctx: RequestContext) {
     invalidate: () => ctx.renderer.invalidate(),
     render: ctx.render,
   });
+}
+
+function onRenderCreateCursor(ctx: RequestContext) {
+  const v = reqView(ctx); const le = ctx.littleEndian;
+  const cid = v.getUint32(4, le);
+  const srcPicture = v.getUint32(8, le);
+  const hx = v.getUint16(12, le);
+  const hy = v.getUint16(14, le);
+  const pic = ctx.render.pictures.get(srcPicture);
+  if (!pic) return;
+  // Prefer the retained drawable ref: the source pixmap is typically freed
+  // before this request (the Picture keeps it alive in real X).
+  const dr = pic.drawableRef ?? getDrawable(ctx, pic.drawable);
+  if (!dr || dr.width === 0 || dr.height === 0) return;
+  // Copy the ARGB image out of the source pixmap — it (and the picture) are
+  // typically freed immediately after the cursor is created.
+  const image = new OffscreenCanvas(dr.width, dr.height);
+  image.getContext('2d')!.drawImage(dr.buffer, 0, 0);
+  ctx.cursors.set(cid, { id: cid, image, hotspotX: hx, hotspotY: hy });
 }
 
 // --- window / property -----------------------------------------------------
@@ -1321,6 +1346,11 @@ function onCreateGlyphCursor(ctx: RequestContext) {
 
 function onFreeCursor(ctx: RequestContext) {
   const cid = reqView(ctx).getUint32(4, ctx.littleEndian);
+  // X keeps a cursor alive as long as it's some window's cursor attribute, and
+  // toolkits routinely create → XDefineCursor → FreeCursor (metacity does this
+  // for the root arrow). Dropping it here would leave that window's pointer
+  // invisible, so only free cursors no window still references.
+  for (const w of ctx.windows.values()) if (w.cursor === cid) return;
   ctx.cursors.delete(cid);
 }
 
