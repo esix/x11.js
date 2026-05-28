@@ -979,19 +979,39 @@ function onSendEvent(ctx: RequestContext) {
   const v = reqView(ctx); const le = ctx.littleEndian;
   const destWid = v.getUint32(4, le);
   const eventMask = v.getUint32(8, le);
-  if (destWid < 4) return;
+  if (destWid === 0) return;                 // None
   const dest = ctx.windows.get(destWid);
   if (!dest) return;
-  // The ICCCM selection handshake (SelectionRequest/Notify/Clear) routinely
-  // targets the sender's own window — same-app copy/paste, e.g. selecting text
-  // in a terminal and middle-click pasting it back. Those must be delivered.
-  // Every other same-client SendEvent stays suppressed: our deliver-back
-  // approximation can't tell whether the sender meant to receive its own event
-  // and doing so has crashed twm.
-  const evtType = (ctx.bytes[12] ?? 0) & 0x7f;
-  const isSelectionEvent = evtType === 29 || evtType === 30 || evtType === 31;
-  if (dest.owner === ctx.clientId && !isSelectionEvent) return;
-  if (eventMask !== 0 && !(dest.eventMask & eventMask)) return;
+
+  // Pick the recipient client.
+  //
+  // EWMH client messages (_NET_ACTIVE_WINDOW from the taskbar, _NET_WM_STATE /
+  // _NET_CLOSE_WINDOW from window-control buttons, _NET_CURRENT_DESKTOP, …) are
+  // sent to the ROOT window with SubstructureRedirect|SubstructureNotify and
+  // must reach the managing window manager — which does NOT own root (root has
+  // no owner). Route any substructure-masked SendEvent to root/parent's
+  // substructure client (the WM). Previously these were dropped entirely
+  // (destWid<4 covered root, and delivery only went to dest.owner), so the WM
+  // never saw them and e.g. clicking a taskbar button never activated a window.
+  const SUB_REDIRECT = 0x100000, SUB_NOTIFY = 0x080000;
+  let recipient: number | undefined;
+  if (eventMask & (SUB_REDIRECT | SUB_NOTIFY)) {
+    recipient = (eventMask & SUB_REDIRECT) ? dest.substructureRedirectClient : undefined;
+    if (recipient === undefined) recipient = dest.substructureNotifyClient;
+  } else {
+    // The ICCCM selection handshake (SelectionRequest/Notify/Clear) routinely
+    // targets the sender's own window — same-app copy/paste, e.g. selecting
+    // text in a terminal and middle-click pasting it back. Those must be
+    // delivered. Every other same-client SendEvent stays suppressed: our
+    // deliver-back approximation can't tell whether the sender meant to receive
+    // its own event and doing so has crashed twm.
+    const evtType = (ctx.bytes[12] ?? 0) & 0x7f;
+    const isSelectionEvent = evtType === 29 || evtType === 30 || evtType === 31;
+    if (dest.owner === ctx.clientId && !isSelectionEvent) return;
+    if (eventMask !== 0 && !(dest.eventMask & eventMask)) return;
+    recipient = dest.owner;
+  }
+  if (recipient === undefined) return;
 
   // Copy the 32-byte event and set the "synthetic" high bit on byte 0.
   // Patch the sequence number to the destination client's last sequence
@@ -999,12 +1019,12 @@ function onSendEvent(ctx: RequestContext) {
   const event = new Uint8Array(32);
   for (let i = 0; i < 32; i++) event[i] = ctx.bytes[12 + i] ?? 0;
   event[0] = (event[0] ?? 0) | 0x80;
-  const info = ctx.clientInfo(dest.owner);
+  const info = ctx.clientInfo(recipient);
   if (info) {
     const dv = new DataView(event.buffer);
     dv.setUint16(2, info.sequence & 0xffff, info.littleEndian);
   }
-  ctx.sendTo(dest.owner, event);
+  ctx.sendTo(recipient, event);
 }
 
 function onGrabPointer(ctx: RequestContext) {
