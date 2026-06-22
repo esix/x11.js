@@ -23,15 +23,17 @@ X11 splits into a **server** (the display — it draws windows and reads input) 
 Docker, with a dumb bridge relaying the protocol over WebSocket. So the X11 names
 end up inverted from where the code actually runs:
 
-```
-   CLIENT SIDE  (browser)      SERVER SIDE  (Docker container)
- ┌──────────────────┐         ┌──────────────┐         ┌──────────────────┐
- │   X11 SERVER     │   WS    │ Node bridge  │  :0     │ X11 CLIENT APPS  │
- │                  │ ws://…  │              │ Unix    │                  │
- │ parse protocol   │ :8080   │ WebSocket ⇄  │ socket  │ firefox, games,  │
- │ draw to <canvas> │◄═══════►│  :0 socket   │◄═══════►│ mate-panel, WM,  │
- │ input → X events │ /x11-ws │ (dumb relay) │  X0     │ gnome-mines, …   │
- └──────────────────┘         └──────────────┘         └──────────────────┘
+```mermaid
+flowchart LR
+    subgraph client["CLIENT SIDE — browser tab"]
+        xs["X11 server<br/>parses the X11 protocol<br/>renders to a canvas<br/>DOM input → X events"]
+    end
+    subgraph server["SERVER SIDE — Docker container"]
+        bridge["Node bridge<br/>dumb relay<br/>:0 socket ⇄ WebSocket"]
+        apps["X11 client apps<br/>firefox · gnome-mahjongg<br/>gnome-mines · mate-panel<br/>metacity (WM)"]
+    end
+    xs <-->|"WebSocket — ws://…:8080/x11-ws"| bridge
+    bridge <-->|"Unix socket — /tmp/.X11-unix/X0 (:0)"| apps
 ```
 
 The browser is the X11 **server** (the display); the apps are the **clients**,
