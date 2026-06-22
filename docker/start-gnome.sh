@@ -1,12 +1,7 @@
 #!/bin/sh
 # Auto-launched when a browser connects to x11-js (see AUTORUN_CMD).
-# Brings up a GNOME-family desktop: D-Bus session, EWMH-aware WM, panel,
-# and a default GNOME app.
-#
-# We use fvwm2 instead of Mutter because Mutter requires the in-page
-# XKB toggle (globalThis.__enable_xkb = true) and we can't set that
-# from the server side. fvwm2 is EWMH-aware enough for gnome-panel's
-# show-desktop button and window-manager probing.
+# Brings up a MATE desktop: D-Bus session, metacity WM, mate-panel, and a
+# terminal. (MATE, not GNOME Shell — Shell needs GLX/Wayland we don't provide.)
 
 set -eu
 
@@ -29,6 +24,12 @@ export DBUS_SESSION_BUS_ADDRESS
 #     the menu-bar + clock + window-list + show-desktop gives a clean panel
 #     where the menu bar renders its labels. Best-effort (|| true): never let a
 #     gsettings hiccup abort the session.
+#
+#     NOTE: on a freshly-created container (empty dconf) this pre-launch set
+#     does NOT stick — mate-panel has no object definitions for these IDs yet
+#     and regenerates its default layout anyway. Step 3b re-applies it after the
+#     first launch creates the definitions. We still set it here so a warm dconf
+#     (e.g. a manual panel restart) comes up right.
 gsettings set org.mate.panel object-id-list \
   "['menu-bar', 'clock', 'window-list', 'show-desktop']" 2>/dev/null || true
 
@@ -44,6 +45,22 @@ sleep 1
 
 # 3. MATE panel (GNOME 2 fork) — uses the same XDG menu data as gnome-panel
 #    but doesn't require org.gnome.SessionManager / Login1.
+mate-panel &
+sleep 3
+
+# 3b. Cold-start completion of step 1b. The first launch above created the
+#     applet object definitions in dconf, so the object-id-list override now
+#     sticks: re-apply it and restart the panel once. Without this, a fresh
+#     container comes up with the menu bar collapsed into an overflow chevron.
+#     (-x matches the exact process name — never this script; || true keeps
+#     set -e happy when nothing matched.)
+gsettings set org.mate.panel object-id-list \
+  "['menu-bar', 'clock', 'window-list', 'show-desktop']" 2>/dev/null || true
+pkill -x mate-panel 2>/dev/null || true
+for applet in wnck-applet clock-applet notification-area-applet; do
+  pkill -x "$applet" 2>/dev/null || true
+done
+sleep 1
 mate-panel &
 sleep 2
 
