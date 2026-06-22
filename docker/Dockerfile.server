@@ -20,6 +20,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         adwaita-icon-theme \
     && rm -rf /var/lib/apt/lists/*
 
+# Firefox — the showcase real-world app, running on the browser-side X server.
+# Kept in its own layer so the base desktop layer stays cached on rebuilds. The
+# plain `firefox` wrapper forces software rendering (the X server has no GLX/EGL).
+RUN apt-get update && apt-get install -y --no-install-recommends firefox-esr \
+    && rm -rf /var/lib/apt/lists/*
+RUN cat > /usr/local/bin/firefox <<'EOF'
+#!/bin/sh
+export MOZ_X11_EGL=0 LIBGL_ALWAYS_SOFTWARE=1 MOZ_ENABLE_WAYLAND=0
+exec /usr/bin/firefox-esr "$@"
+EOF
+RUN chmod +x /usr/local/bin/firefox
+
 # fvwm needs a config to do anything; without it it sits silently.
 RUN mkdir -p /root/.fvwm && cp /usr/share/fvwm2/default-config/config /root/.fvwm/config
 
