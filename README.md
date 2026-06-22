@@ -41,6 +41,18 @@ running in Docker and reaching it through the bridge. Apps connect to the bridge
 over a normal Unix socket (`/tmp/.X11-unix/X0`, display `:0`); the bridge forwards
 the raw protocol over a WebSocket to the browser, which does the real X server work.
 
+## Documentation
+
+A guided tour — from the first three-line X clients to a full desktop and
+Firefox — lives in [`docs/`](docs/README.md):
+
+- [Getting started: xeyes, xclock, xterm](docs/01-getting-started.md)
+- [The protocol we had to implement](docs/02-protocol.md)
+- [A whole desktop: MATE](docs/03-mate-desktop.md)
+- [GNOME games: Mahjongg and Mines](docs/04-games.md)
+- [The file manager: Caja](docs/05-file-manager.md)
+- [The big one: Firefox](docs/06-firefox.md)
+
 ## Layout
 
 ```

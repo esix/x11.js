@@ -6,6 +6,8 @@ dist
 
 # debugging screenshots collected at repo root during development
 *.png
+# ...but keep the documentation images
+!docs/images/*.png
 
 # playwright-mcp scratch dir
 .playwright-mcp/
