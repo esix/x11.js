@@ -10,6 +10,35 @@ know they're talking to a browser.
 
 The bridge is intentionally dumb; all X11 protocol logic lives in `packages/client`.
 
+## Demo
+
+Opening gnome-mines, gnome-mahjongg, and Firefox — every pixel rendered in the browser's `<canvas>`:
+
+https://github.com/user-attachments/assets/4133f75b-4fc1-4a0f-aaab-39b5113d0fff
+
+## How it works
+
+X11 splits into a **server** (the display — it draws windows and reads input) and
+**clients** (the apps). x11.js runs the server in your browser and the clients in
+Docker, with a dumb bridge relaying the protocol over WebSocket. So the X11 names
+end up inverted from where the code actually runs:
+
+```
+   CLIENT SIDE  (browser)      SERVER SIDE  (Docker container)
+ ┌──────────────────┐         ┌──────────────┐         ┌──────────────────┐
+ │   X11 SERVER     │   WS    │ Node bridge  │  :0     │ X11 CLIENT APPS  │
+ │                  │ ws://…  │              │ Unix    │                  │
+ │ parse protocol   │ :8080   │ WebSocket ⇄  │ socket  │ firefox, games,  │
+ │ draw to <canvas> │◄═══════►│  :0 socket   │◄═══════►│ mate-panel, WM,  │
+ │ input → X events │ /x11-ws │ (dumb relay) │  X0     │ gnome-mines, …   │
+ └──────────────────┘         └──────────────┘         └──────────────────┘
+```
+
+The browser is the X11 **server** (the display); the apps are the **clients**,
+running in Docker and reaching it through the bridge. Apps connect to the bridge
+over a normal Unix socket (`/tmp/.X11-unix/X0`, display `:0`); the bridge forwards
+the raw protocol over a WebSocket to the browser, which does the real X server work.
+
 ## Layout
 
 ```
