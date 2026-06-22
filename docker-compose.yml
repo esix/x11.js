@@ -5,7 +5,9 @@ services:
       dockerfile: docker/Dockerfile.server
     container_name: x11js-server
     ports:
-      - "9090:9090"
+      # Localhost-only: the browser no longer hits this directly — Vite proxies
+      # /x11-ws here. Use "9090:9090" if Vite runs on a different host.
+      - "127.0.0.1:9090:9090"
     volumes:
       - .:/app
       - server_node_modules:/app/node_modules
@@ -14,7 +16,7 @@ services:
       DISPLAY_NUM: "0"
       WS_PORT: "9090"
       # AUTORUN_CMD defaults to /usr/local/bin/start-gnome (set in Dockerfile),
-      # which brings up fvwm + gnome-panel + mate-terminal on connect.
+      # which brings up a MATE desktop (metacity + mate-panel + mate-terminal).
       # To revert to the xterm-only behavior:
       #   AUTORUN_CMD: "xterm"
       #   AUTORUN_ARGS: "-sb -sl 5000"

@@ -9,7 +9,9 @@ const renderer = new Renderer(canvas);
 const server = new XServer(renderer);
 (globalThis as unknown as Record<string, unknown>).__x11 = { server, renderer };
 
-const wsUrl = `ws://${location.hostname}:9090`;
+// Same-origin WebSocket: Vite (dev) / preview proxies /x11-ws to the bridge,
+// so the browser only ever uses the one page port. wss when served over https.
+const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/x11-ws`;
 const transport = new Transport(wsUrl, {
   onOpen() { status.textContent = `connected — ${wsUrl} (DISPLAY=:0 open)`; },
   onClose() { status.textContent = `disconnected — reconnecting to ${wsUrl}…`; },
