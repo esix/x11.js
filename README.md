@@ -16,6 +16,10 @@ Opening gnome-mines, gnome-mahjongg, and Firefox — every pixel rendered in the
 
 https://github.com/user-attachments/assets/4133f75b-4fc1-4a0f-aaab-39b5113d0fff
 
+…and the MATE file manager (Caja) browsing the filesystem — folder icons, sidebar and breadcrumbs, all rendered to the canvas:
+
+![The Caja file manager running on the browser-side X server](docs/images/caja.png)
+
 ## How it works
 
 X11 splits into a **server** (the display — it draws windows and reads input) and
